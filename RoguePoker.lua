@@ -1,6 +1,6 @@
 -- ==========================================
 -- RoguePoker - Rogue Rotation Advisor
--- Turtle WoW (1.12 Client)
+-- Turtle WoW (1.18 Client)
 -- ==========================================
 -- .toc requires: ## SavedVariables: RoguePokerDB
 
@@ -9,7 +9,6 @@
 -- ==========================================
 RoguePoker = {}
 RoguePoker.TickTime = 2
-RoguePoker.Global = 1
 RoguePoker.FirstTick = 0
 RoguePoker.Energy = 110
 
@@ -24,96 +23,177 @@ RoguePoker.f:SetScript("OnEvent", function()
 end)
 
 -- ==========================================
--- Ability Name Registry
+-- Master Ability Definitions
 -- ==========================================
-RoguePoker.name = {
-	[1]  = "Slice and Dice",
-	[2]  = "Envenom",
-	[3]  = "Taste for Blood",
-	[4]  = "Rupture",
-	[5]  = "Noxious Assault",
-	[6]  = "Eviscerate",
-	[7]  = "Feint",
-	[8]  = "Ghostly Strike",
-	[9]  = "Evasion",
-	[10] = "Vanish",
-	[11] = "Flourish",
-	[12] = "Kick",
-	[13] = "Gouge",
-	[14] = "Blind",
-	[15] = "Deadly Throw",
-	[16] = "Throw",
-	[17] = "Sinister Strike",
-	[18] = "Backstab",
-	[19] = "Hemorrhage",
+
+-- Combo builders to choose from
+RoguePoker.BUILDERS = {
+	"Sinister Strike",
+	"Noxious Assault",
+	"Backstab",
+	"Hemorrhage",
 }
+
+-- Finishers with default CP threshold and type
+-- type: "buff" (keep active), "dot" (don't reapply while active),
+--       "damage" (always cast at CP), "conditional" (no CP req, cast when available)
+RoguePoker.FINISHER_DEFAULTS = {
+	{ name = "Slice and Dice",  minCP = 1, kind = "buff" },
+	{ name = "Envenom",         minCP = 1, kind = "buff" },
+	{ name = "Rupture",         minCP = 5, kind = "dot" },
+	{ name = "Expose Armor",    minCP = 5, kind = "dot" },
+	{ name = "Shadow of Death", minCP = 5, kind = "dot" },
+	{ name = "Eviscerate",      minCP = 5, kind = "damage" },
+	{ name = "Riposte",         minCP = 0, kind = "conditional" },
+	{ name = "Surprise Attack", minCP = 0, kind = "conditional" },
+}
+
+-- Evasion abilities
+RoguePoker.EVASION_DEFAULTS = {
+	{ name = "Feint" },
+	{ name = "Ghostly Strike" },
+	{ name = "Flourish" },
+	{ name = "Evasion" },
+	{ name = "Vanish" },
+}
+
+-- Interrupt abilities master list
+RoguePoker.INTERRUPT_DEFAULTS = {
+	{ name = "Kick" },
+	{ name = "Gouge" },
+	{ name = "Blind" },
+	{ name = "Deadly Throw" },
+	{ name = "Throw/Shoot" },
+}
+
+-- Energy costs for ShouldWait check
+RoguePoker.energyCost = {
+	["Sinister Strike"]  = 45,
+	["Noxious Assault"]  = 45,
+	["Backstab"]         = 60,
+	["Hemorrhage"]       = 35,
+	["Slice and Dice"]   = 25,
+	["Envenom"]          = 35,
+	["Rupture"]          = 25,
+	["Eviscerate"]       = 35,
+	["Expose Armor"]     = 25,
+	["Shadow of Death"]  = 35,
+	["Riposte"]          = 10,
+	["Surprise Attack"]  = 0,
+	["Deadly Throw"]     = 35,
+	["Throw/Shoot"]      = 0,
+	["Feint"]            = 20,
+	["Ghostly Strike"]   = 40,
+	["Flourish"]         = 20,
+	["Evasion"]          = 0,
+	["Vanish"]           = 0,
+}
+
+-- ==========================================
+-- Spellbook Scanner
+-- ==========================================
+function RoguePoker:HasSpell(spellName)
+	for i = 1, 200 do
+		local name = GetSpellName(i, BOOKTYPE_SPELL)
+		if not name then break end
+		if name == spellName then return true end
+	end
+	return false
+end
+
+function RoguePoker:FindSpellid(spellName)
+	for i = 1, 200 do
+		local name = GetSpellName(i, BOOKTYPE_SPELL)
+		if not name then break end
+		if name == spellName then return i end
+	end
+	return 0
+end
+
+-- Scans spellbook and returns filtered list, keeping only known spells
+function RoguePoker:FilterKnown(list)
+	local result = {}
+	for _, entry in ipairs(list) do
+		local n = type(entry) == "table" and entry.name or entry
+		if RoguePoker:HasSpell(n) then
+			result[table.getn(result) + 1] = entry
+		end
+	end
+	return result
+end
 
 -- ==========================================
 -- Default Settings
 -- ==========================================
 local defaults = {
-	position      = { x = 400, y = 300 },
-	configOpen    = false,
-	-- Combo builder: "Noxious Assault", "Sinister Strike", "Backstab", "Hemorrhage"
-	comboBuilder  = "Noxious Assault",
-	-- Finisher threshold
-	comboThreshold = 5,
-	-- Buffs to keep active
-	keepActive = {
-		sliceAndDice = true,
-		envenom      = true,
-		rupture      = true,
+	comboBuilder  = "Sinister Strike",
+	useInsignia   = true,
+	alwaysFeint   = false,
+	-- finishers: ordered list of { name, minCP, enabled }
+	finishers = {
+		{ name = "Slice and Dice",  minCP = 1, enabled = true,  kind = "buff" },
+		{ name = "Envenom",         minCP = 1, enabled = true,  kind = "buff" },
+		{ name = "Rupture",         minCP = 5, enabled = true,  kind = "dot" },
+		{ name = "Expose Armor",    minCP = 5, enabled = true,  kind = "dot" },
+		{ name = "Shadow of Death", minCP = 5, enabled = true,  kind = "dot" },
+		{ name = "Eviscerate",      minCP = 5, enabled = true,  kind = "damage" },
+		{ name = "Riposte",         minCP = 0, enabled = true,  kind = "conditional" },
+		{ name = "Surprise Attack", minCP = 0, enabled = true,  kind = "conditional" },
 	},
-	-- PvP trinket
-	useInsignia = true,
-	-- Tanking mode: always use tank/evade rotation, never use Feint
-	tankingMode = false,
-	-- Always feint regardless of who is targeting
-	alwaysFeint = false,
-	-- Tank/evade abilities (used when mob is targeting player)
-	tankAbilities = {
-		ghostlyStrike = true,
-		flourish      = true,
-		evasion       = true,
-		feint         = true,
-		vanish        = false,
+	-- evasion: ordered list of { name, enabled, healthPct (optional) }
+	evasion = {
+		{ name = "Feint",          enabled = true },
+		{ name = "Ghostly Strike", enabled = true },
+		{ name = "Flourish",       enabled = true },
+		{ name = "Evasion",        enabled = true,  healthPct = 50 },
+		{ name = "Vanish",         enabled = false, healthPct = 20 },
+	},
+	-- interrupt: ordered list of { name, enabled }
+	interrupt = {
+		{ name = "Kick",         enabled = true  },
+		{ name = "Gouge",        enabled = true  },
+		{ name = "Blind",        enabled = false },
+		{ name = "Deadly Throw", enabled = true  },
+		{ name = "Throw/Shoot",  enabled = true  },
 	},
 }
 
 -- ==========================================
 -- DB Init
 -- ==========================================
-local function InitDB()
-	RoguePokerDB = RoguePokerDB or {}
-
-	if not RoguePokerDB.position      then RoguePokerDB.position      = defaults.position      end
-	if not RoguePokerDB.comboBuilder  then RoguePokerDB.comboBuilder  = defaults.comboBuilder  end
-	if RoguePokerDB.comboThreshold == nil then RoguePokerDB.comboThreshold = defaults.comboThreshold end
-	if RoguePokerDB.useInsignia == nil then RoguePokerDB.useInsignia = defaults.useInsignia end
-	if RoguePokerDB.tankingMode == nil then RoguePokerDB.tankingMode = defaults.tankingMode end
-	if RoguePokerDB.alwaysFeint == nil then RoguePokerDB.alwaysFeint = defaults.alwaysFeint end
-
-	if not RoguePokerDB.keepActive then
-		RoguePokerDB.keepActive = {}
-		for k, v in pairs(defaults.keepActive) do RoguePokerDB.keepActive[k] = v end
-	else
-		for k, v in pairs(defaults.keepActive) do
-			if RoguePokerDB.keepActive[k] == nil then RoguePokerDB.keepActive[k] = v end
+local function deepCopy(orig)
+	if orig == nil then return {} end
+	local copy = {}
+	for k, v in pairs(orig) do
+		if type(v) == "table" then
+			copy[k] = deepCopy(v)
+		else
+			copy[k] = v
 		end
 	end
-
-	if not RoguePokerDB.tankAbilities then
-		RoguePokerDB.tankAbilities = {}
-		for k, v in pairs(defaults.tankAbilities) do RoguePokerDB.tankAbilities[k] = v end
-	else
-		for k, v in pairs(defaults.tankAbilities) do
-			if RoguePokerDB.tankAbilities[k] == nil then RoguePokerDB.tankAbilities[k] = v end
-		end
-	end
-
-	RoguePokerDB.discoveredTextures = RoguePokerDB.discoveredTextures or {}
+	return copy
 end
 
+local function isEmpty(t)
+	return t == nil or table.getn(t) == 0
+end
+
+local function InitDB()
+	RoguePokerDB = RoguePokerDB or {}
+	if RoguePokerDB.comboBuilder  == nil then RoguePokerDB.comboBuilder  = defaults.comboBuilder  end
+	if RoguePokerDB.useInsignia   == nil then RoguePokerDB.useInsignia   = defaults.useInsignia   end
+	if RoguePokerDB.alwaysFeint   == nil then RoguePokerDB.alwaysFeint   = defaults.alwaysFeint   end
+	if isEmpty(RoguePokerDB.finishers) then RoguePokerDB.finishers = deepCopy(defaults.finishers)  end
+	if isEmpty(RoguePokerDB.evasion)   then RoguePokerDB.evasion   = deepCopy(defaults.evasion)    end
+	if isEmpty(RoguePokerDB.interrupt) then RoguePokerDB.interrupt = deepCopy(defaults.interrupt)  end
+	-- Migrate old "Throw" entry to "Throw/Shoot"
+	if RoguePokerDB.interrupt then
+		for _, ab in ipairs(RoguePokerDB.interrupt) do
+			if ab.name == "Throw" then ab.name = "Throw/Shoot" end
+		end
+	end
+	RoguePokerDB.discoveredTextures = RoguePokerDB.discoveredTextures or {}
+end
 
 -- ==========================================
 -- Core Utility Functions
@@ -122,13 +202,18 @@ end
 function RoguePoker:GetNextTick()
 	local i, now = RoguePoker.FirstTick, GetTime()
 	while true do
-		if (i > now) then return (i - now) end
+		if i > now then return i - now end
 		i = i + RoguePoker.TickTime
 	end
 end
 
-local tooltipFrame = nil
+function RoguePoker:ShouldWait(spellName)
+	local cost = RoguePoker.energyCost[spellName] or 35
+	local energy = UnitMana("player")
+	return (energy < cost and RoguePoker:GetNextTick() > 1)
+end
 
+local tooltipFrame = nil
 function RoguePoker:IsActive(name)
 	if not tooltipFrame then
 		tooltipFrame = CreateFrame("GameTooltip", "RoguePokerTooltip", UIParent, "GameTooltipTemplate")
@@ -149,27 +234,39 @@ function RoguePoker:IsActive(name)
 	return false, 0
 end
 
-function RoguePoker:FindSpellid(SpellName)
-	for i = 1, 100 do
-		local name, rank = GetSpellName(i, BOOKTYPE_SPELL)
-		if name == SpellName then return i end
-	end
-	return 0
-end
-
-function RoguePoker:PrintSpellid()
-	for i = 1, 100 do
-		local name, rank = GetSpellName(i, BOOKTYPE_SPELL)
-		if name then print(i, name, rank) end
-	end
-end
-
 function RoguePoker:AutoAttack()
 	if not IsCurrentAction(72) then AttackTarget() end
 end
 
 function RoguePoker:AtRange()
 	return IsActionInRange(71) == 1
+end
+
+function RoguePoker:GetRangedWeaponType()
+	local rangedLink = GetInventoryItemLink("player", 18)
+	if not rangedLink then return nil end
+	if not RoguePoker.rangedTip then
+		RoguePoker.rangedTip = CreateFrame("GameTooltip", "RoguePokerRangedTip", UIParent, "GameTooltipTemplate")
+		RoguePoker.rangedTip:SetOwner(UIParent, "ANCHOR_NONE")
+	end
+	local tip = RoguePoker.rangedTip
+	tip:ClearLines()
+	tip:SetInventoryItem("player", 18)
+	for i = 1, tip:NumLines() do
+		local line = getglobal("RoguePokerRangedTipTextLeft" .. i)
+		if line then
+			local t = line:GetText()
+			if t then
+				if string.find(t, "Thrown")   then return "Thrown"
+				elseif string.find(t, "Crossbow") then return "Crossbow"
+				elseif string.find(t, "Bow")      then return "Bow"
+				elseif string.find(t, "Gun")      then return "Gun"
+				elseif string.find(t, "Wand")     then return "Wand"
+				end
+			end
+		end
+	end
+	return nil
 end
 
 function RoguePoker:IsMyTargetTargetingMe()
@@ -326,15 +423,14 @@ function RoguePoker:IsBadStatus()
 end
 
 function RoguePoker:UseInsignia()
-	local trinketName = "Insignia of the Horde"
 	local slot13 = GetInventoryItemLink("player", 13)
 	local slot14 = GetInventoryItemLink("player", 14)
 	local slot = nil
-	if slot13 and string.find(slot13, trinketName) then
-		slot = 13
-	elseif slot14 and string.find(slot14, trinketName) then
-		slot = 14
+	local function isInsignia(link)
+		return link and (string.find(link, "Insignia of the Horde") or string.find(link, "Insignia of the Alliance"))
 	end
+	if isInsignia(slot13) then slot = 13
+	elseif isInsignia(slot14) then slot = 14 end
 	if slot then
 		local start, duration, enabled = GetInventoryItemCooldown("player", slot)
 		if duration == 0 then
@@ -346,18 +442,244 @@ function RoguePoker:UseInsignia()
 end
 
 -- ==========================================
--- Debuff Recording (debug)
+-- Rotation Engine
 -- ==========================================
-function RoguePoker:RecordDebuffs()
-	local i = 1
-	while true do
-		local texture = UnitDebuff("player", i)
-		if not texture then break end
-		if not RoguePokerDB.discoveredTextures[texture] then
-			RoguePokerDB.discoveredTextures[texture] = true
-		end
-		i = i + 1
+
+function RoguePoker:Rota()
+	local db          = RoguePokerDB
+	local cP          = GetComboPoints("player")
+	local energy      = UnitMana("player")
+	local mobTargetsMe = (not UnitIsPlayer("target")) and RoguePoker:IsMyTargetTargetingMe()
+
+	RoguePoker:AutoAttack()
+	RoguePoker:AssistPlayer()
+
+	-- Insignia on bad status
+	if db.useInsignia and RoguePoker:IsBadStatus() then
+		RoguePoker:UseInsignia()
+		return
 	end
+
+	-- ---- Always Feint (threat reduction, not in tank mode) ----
+	if db.alwaysFeint then
+		local feintEnabled = false
+		for _, ev in ipairs(db.evasion) do
+			if ev.name == "Feint" and ev.enabled then feintEnabled = true break end
+		end
+		if feintEnabled then
+			local sid = RoguePoker:FindSpellid("Feint")
+			if sid > 0 then
+				local _, dur = GetSpellCooldown(sid, BOOKTYPE_SPELL)
+				if dur == 0 and not RoguePoker:ShouldWait("Feint") then
+					CastSpellByName("Feint")
+					return
+				end
+			end
+		end
+	end
+
+	-- ---- Evasion / Tank abilities ----
+	if mobTargetsMe then
+		for _, ev in ipairs(db.evasion) do
+			if ev.enabled then
+				local name = ev.name
+				local sid = RoguePoker:FindSpellid(name)
+				if sid > 0 then
+					local _, dur = GetSpellCooldown(sid, BOOKTYPE_SPELL)
+
+					-- Feint: cast whenever off cooldown
+					if name == "Feint" then
+						if dur == 0 and not RoguePoker:ShouldWait(name) then
+							CastSpellByName(name)
+							return
+						end
+
+					-- Vanish: emergency only below configured health threshold
+					elseif name == "Vanish" then
+						local ph = UnitHealth("player")
+						local phMax = UnitHealthMax("player")
+						local phPct = (phMax > 0) and (100 * ph / phMax) or 100
+						local threshold = ev.healthPct or 20
+						if dur == 0 and phPct < threshold then
+							CastSpellByName(name)
+							return
+						end
+
+					-- Evasion: only below configured health threshold
+					elseif name == "Evasion" then
+						local ph = UnitHealth("player")
+						local phMax = UnitHealthMax("player")
+						local phPct = (phMax > 0) and (100 * ph / phMax) or 100
+						local threshold = ev.healthPct or 50
+						local active, timeLeft = RoguePoker:IsActive(name)
+						if dur == 0 and phPct < threshold and (not active or timeLeft <= 2) then
+							CastSpellByName(name)
+							return
+						end
+
+					-- Ghostly Strike / Flourish: one-buff-at-a-time rule
+					else
+						-- Check if any non-Feint evasion buff is already active > 2s
+						local buffActive = false
+						for _, ev2 in ipairs(db.evasion) do
+							if ev2.name ~= "Feint" and ev2.name ~= "Vanish" and ev2.name ~= "Evasion" then
+								local a, t = RoguePoker:IsActive(ev2.name)
+								if a and t > 2 then buffActive = true break end
+							end
+						end
+						if not buffActive then
+							local active, timeLeft = RoguePoker:IsActive(name)
+							local needsCP = (name == "Flourish")
+							if dur == 0 and (not active or timeLeft <= 2) then
+								if not needsCP or cP > 0 then
+									if not RoguePoker:ShouldWait(name) then
+										CastSpellByName(name)
+										return
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- ---- Finishers (work down priority list) ----
+	for _, fin in ipairs(db.finishers) do
+		if fin.enabled then
+			local name = fin.name
+			local kind = fin.kind or "damage"
+
+			-- Conditional abilities: no CP requirement, fire when available
+			if kind == "conditional" then
+				local sid = RoguePoker:FindSpellid(name)
+				if sid > 0 then
+					local _, dur = GetSpellCooldown(sid, BOOKTYPE_SPELL)
+					if dur == 0 then
+						if not RoguePoker:ShouldWait(name) then
+							CastSpellByName(name)
+							return
+						end
+					end
+				end
+
+			-- All other finishers require minimum CP
+			elseif cP >= fin.minCP then
+				-- For Rupture, activity is indicated by "Taste for Blood" buff on player
+				local checkName = name
+				if name == "Rupture" then checkName = "Taste for Blood" end
+				local active, timeLeft = RoguePoker:IsActive(checkName)
+
+				if kind == "buff" then
+					local needsRefresh = (not active) or (active and timeLeft > 0.5 and timeLeft < 2)
+					if needsRefresh and not RoguePoker:ShouldWait(name) then
+						CastSpellByName(name)
+						return
+					end
+
+				elseif kind == "dot" then
+					if (not active or timeLeft < 5) and not RoguePoker:ShouldWait(name) then
+						CastSpellByName(name)
+						return
+					end
+
+				else -- damage
+					if not RoguePoker:ShouldWait(name) then
+						CastSpellByName(name)
+						return
+					end
+				end
+			end
+		end
+	end
+
+	-- ---- Combo Builder ----
+	local builder = db.comboBuilder or "Sinister Strike"
+	if not RoguePoker:ShouldWait(builder) then
+		CastSpellByName(builder)
+	end
+end
+
+-- ==========================================
+-- Interrupt Engine
+-- ==========================================
+function RoguePoker:Interrupt()
+	local db = RoguePokerDB
+	for _, ab in ipairs(db.interrupt) do
+		if ab.enabled then
+			local name = ab.name
+			local isRanged = (name == "Deadly Throw" or name == "Throw/Shoot")
+
+			-- Resolve castable spell name
+			local castName = name
+
+			if name == "Deadly Throw" then
+				-- Requires a thrown weapon equipped
+				local wtype = RoguePoker:GetRangedWeaponType()
+				if wtype ~= "Thrown" then
+					-- No thrown weapon, skip and fall through
+					castName = nil
+				end
+
+			elseif name == "Throw/Shoot" then
+				-- Resolve to the correct spell for the equipped ranged weapon
+				local wtype = RoguePoker:GetRangedWeaponType()
+				if     wtype == "Thrown"   then castName = "Throw"
+				elseif wtype == "Bow"      then castName = "Shoot Bow"
+				elseif wtype == "Crossbow" then castName = "Shoot Crossbow"
+				elseif wtype == "Gun"      then castName = "Shoot Gun"
+				elseif wtype == "Wand"     then castName = "Shoot"
+				else castName = nil  -- no ranged weapon equipped, skip
+				end
+			end
+
+			if castName then
+				-- Ranged abilities: check range first
+				if isRanged then
+					if RoguePoker:AtRange() then
+						local sid = RoguePoker:FindSpellid(castName)
+						if sid > 0 then
+							local _, dur = GetSpellCooldown(sid, BOOKTYPE_SPELL)
+							if dur == 0 then
+								if not RoguePoker:ShouldWait(castName) then
+									CastSpellByName(castName)
+									return
+								end
+							end
+						end
+					end
+				else
+					local sid = RoguePoker:FindSpellid(castName)
+					if sid > 0 then
+						local _, dur = GetSpellCooldown(sid, BOOKTYPE_SPELL)
+						if dur == 0 then
+							if not RoguePoker:ShouldWait(castName) then
+								CastSpellByName(castName)
+								return
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+-- ==========================================
+-- Debug Helpers
+-- ==========================================
+function RoguePoker:DebugBuffs()
+	for i = 0, 31 do
+		local buffIndex = GetPlayerBuff(i, "HELPFUL")
+		if buffIndex < 0 then break end
+		local timeLeft = GetPlayerBuffTimeLeft(buffIndex)
+		print("Buff " .. i .. " index:" .. buffIndex .. " timeLeft:" .. tostring(timeLeft))
+	end
+	local sdActive, sdTime = RoguePoker:IsActive("Slice and Dice")
+	local eActive, eTime   = RoguePoker:IsActive("Envenom")
+	print("SD active:" .. tostring(sdActive) .. " time:" .. tostring(sdTime))
+	print("Envenom active:" .. tostring(eActive) .. " time:" .. tostring(eTime))
 end
 
 function RoguePoker:DebugDebuffs()
@@ -366,308 +688,23 @@ function RoguePoker:DebugDebuffs()
 		local a, b, c, d, e = UnitDebuff("player", i)
 		if not a then break end
 		if not RoguePoker.badTextures[a] then
-			print("Debuff " .. i .. ": " .. tostring(a) .. " | " .. tostring(b) .. " | " .. tostring(c) .. " | " .. tostring(d) .. " | " .. tostring(e))
+			print("Debuff " .. i .. ": " .. tostring(a))
 		end
 		i = i + 1
 	end
 end
 
-
-function RoguePoker:DebugBuffs()
-	for i = 0, 31 do
-		local buffIndex = GetPlayerBuff(i, "HELPFUL")
-		if buffIndex < 0 then break end
-		local timeLeft = GetPlayerBuffTimeLeft(buffIndex)
-		print("Buff " .. i .. " index:" .. buffIndex .. " timeLeft:" .. tostring(timeLeft))
+function RoguePoker:PrintSpellid()
+	for i = 1, 200 do
+		local name, rank = GetSpellName(i, BOOKTYPE_SPELL)
+		if not name then break end
+		print(i, name, rank)
 	end
-	local sdActive, sdTime = RoguePoker:IsActive(RoguePoker.name[1])
-	local eActive, eTime = RoguePoker:IsActive(RoguePoker.name[2])
-	print("SD active:" .. tostring(sdActive) .. " time:" .. tostring(sdTime))
-	print("Envenom active:" .. tostring(eActive) .. " time:" .. tostring(eTime))
-end
--- ==========================================
--- Rotation Engine
--- ==========================================
-
--- Returns the energy cost of a spell so we can check if we should wait for tick
-local energyCost = {
-	["Slice and Dice"]  = 25,
-	["Envenom"]         = 35,
-	["Rupture"]         = 25,
-	["Eviscerate"]      = 35,
-	["Noxious Assault"] = 45,
-	["Sinister Strike"] = 45,
-	["Backstab"]        = 60,
-	["Hemorrhage"]      = 35,
-	["Ghostly Strike"]  = 40,
-	["Flourish"]        = 20,
-	["Evasion"]         = 0,
-	["Feint"]           = 20,
-	["Vanish"]          = 0,
-	["Kick"]            = 25,
-	["Gouge"]           = 45,
-	["Blind"]           = 30,
-	["Deadly Throw"]    = 40,
-	["Throw"]           = 0,
-}
-
-function RoguePoker:ShouldWait(spellName)
-	local cost = energyCost[spellName] or 35
-	local energy = UnitMana("player")
-	return (energy <= cost and RoguePoker:GetNextTick() > 1)
-end
-
--- Core rotation driven by DB config
-function RoguePoker:Rota()
-	local db         = RoguePokerDB
-	local ka         = db.keepActive
-	local ta         = db.tankAbilities
-	local builder    = db.comboBuilder or "Noxious Assault"
-	local threshold  = db.comboThreshold or 5
-
-	local cP         = GetComboPoints("player")
-	local energy     = UnitMana("player")
-	local health     = UnitHealth("target")
-	local healthMax  = UnitHealthMax("target")
-	local healthPct  = (healthMax > 0) and (100 * health / healthMax) or 100
-	local mobTargetsMe = RoguePokerDB.tankingMode or ((not UnitIsPlayer("target")) and RoguePoker:IsMyTargetTargetingMe())
-
-	RoguePoker:AutoAttack()
-
-	-- Bad status: try insignia if enabled
-	if RoguePokerDB.useInsignia and RoguePoker:IsBadStatus() then
-		RoguePoker:UseInsignia()
-		return
-	end
-
-	-- Assist if targeting a player
-	RoguePoker:AssistPlayer()
-
-	-- Always Feint if enabled (fires regardless of who is targeting, disabled in Tanking Mode)
-	if RoguePokerDB.alwaysFeint and not RoguePokerDB.tankingMode then
-		if ta.feint then
-			local _, Fduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[7]), BOOKTYPE_SPELL)
-			if Fduration == 0 then
-				if not RoguePoker:ShouldWait(RoguePoker.name[7]) then
-					CastSpellByName(RoguePoker.name[7])
-					return
-				end
-			end
-		end
-	end
-
-	-- ---- Tank/Evade abilities (only when mob is targeting me) ----
-	if mobTargetsMe then
-
-		-- Feint is highest priority when mob targets me (disabled in Tanking Mode)
-		if ta.feint and not RoguePokerDB.tankingMode then
-			local _, Fduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[7]), BOOKTYPE_SPELL)
-			if Fduration == 0 then
-				if not RoguePoker:ShouldWait(RoguePoker.name[7]) then
-					CastSpellByName(RoguePoker.name[7])
-					return
-				end
-			end
-		end
-
-		-- Vanish is an emergency and bypasses the one-buff rule
-		if ta.vanish then
-			local playerHealth = UnitHealth("player")
-			local playerHealthMax = UnitHealthMax("player")
-			local playerHealthPct = (playerHealthMax > 0) and (100 * playerHealth / playerHealthMax) or 100
-			local _, Vduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[10]), BOOKTYPE_SPELL)
-			if Vduration == 0 and playerHealthPct < 20 then
-				CastSpellByName(RoguePoker.name[10])
-				return
-			end
-		end
-
-		-- Check if any tank buff is currently active with more than 2 seconds left
-		local tankBuffActive = false
-		if ta.ghostlyStrike then
-			local GSactive, GStimeLeft = RoguePoker:IsActive(RoguePoker.name[8])
-			if GSactive and GStimeLeft > 2 then tankBuffActive = true end
-		end
-		if ta.flourish then
-			local FLactive, FLtimeLeft = RoguePoker:IsActive(RoguePoker.name[11])
-			if FLactive and FLtimeLeft > 2 then tankBuffActive = true end
-		end
-		if ta.evasion then
-			local EVactive, EVtimeLeft = RoguePoker:IsActive(RoguePoker.name[9])
-			if EVactive and EVtimeLeft > 2 then tankBuffActive = true end
-		end
-
-		-- Only try to apply a new tank buff if none are active with > 2s left
-		if not tankBuffActive then
-
-			-- Ghostly Strike (highest priority)
-			if ta.ghostlyStrike then
-				local GSactive, GStimeLeft = RoguePoker:IsActive(RoguePoker.name[8])
-				local _, GSduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[8]), BOOKTYPE_SPELL)
-				if GSduration == 0 and (not GSactive or GStimeLeft <= 2) then
-					if not RoguePoker:ShouldWait(RoguePoker.name[8]) then
-						CastSpellByName(RoguePoker.name[8])
-						return
-					end
-				end
-			end
-
-			-- Flourish (needs at least 1 CP)
-			if ta.flourish and cP > 0 then
-				local FLactive, FLtimeLeft = RoguePoker:IsActive(RoguePoker.name[11])
-				local _, FLduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[11]), BOOKTYPE_SPELL)
-				if FLduration == 0 and (not FLactive or FLtimeLeft <= 2) then
-					if not RoguePoker:ShouldWait(RoguePoker.name[11]) then
-						CastSpellByName(RoguePoker.name[11])
-						return
-					end
-				end
-			end
-
-			-- Evasion - 50% health threshold normally, 60% in tanking mode
-			if ta.evasion then
-				local playerHealth = UnitHealth("player")
-				local playerHealthMax = UnitHealthMax("player")
-				local playerHealthPct = (playerHealthMax > 0) and (100 * playerHealth / playerHealthMax) or 100
-				local evasionThreshold = RoguePokerDB.tankingMode and 60 or 50
-				local EVactive, EVtimeLeft = RoguePoker:IsActive(RoguePoker.name[9])
-				local _, EVduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[9]), BOOKTYPE_SPELL)
-				if EVduration == 0 and (not EVactive or EVtimeLeft <= 2) and playerHealthPct < evasionThreshold then
-					CastSpellByName(RoguePoker.name[9])
-					return
-				end
-			end
-
-		end
-
-	end
-
-	-- ---- Finishers at threshold ----
-	if cP >= threshold then
-
-		-- Rupture: only fires at exactly threshold CP and only if not already active
-		if ka.rupture then
-			local Ractive, RtimeLeft = RoguePoker:IsActive(RoguePoker.name[4])
-			if not Ractive or RtimeLeft < 5 then
-				if not RoguePoker:ShouldWait(RoguePoker.name[4]) then
-					CastSpellByName(RoguePoker.name[4])
-					return
-				end
-			end
-		end
-
-		-- Eviscerate on low health
-		if not (healthPct > 40 or (health > 5000 and healthPct > 50)) then
-			if not RoguePoker:ShouldWait(RoguePoker.name[6]) then
-				CastSpellByName(RoguePoker.name[6])
-				return
-			end
-		end
-
-		-- Default finisher: Eviscerate
-		if not RoguePoker:ShouldWait(RoguePoker.name[6]) then
-			CastSpellByName(RoguePoker.name[6])
-			return
-		end
-	end
-
-	-- ---- Buff upkeep (needs at least 1 CP) ----
-	-- Apply if not active OR if active but expiring within 2 seconds
-
-	-- Slice and Dice
-	if ka.sliceAndDice and cP >= 1 then
-		local SDactive, SDtimeLeft = RoguePoker:IsActive(RoguePoker.name[1])
-		local SDneedsRefresh = (not SDactive) or (SDactive and SDtimeLeft > 0.5 and SDtimeLeft < 2)
-		if SDneedsRefresh then
-			if not RoguePoker:ShouldWait(RoguePoker.name[1]) then
-				CastSpellByName(RoguePoker.name[1])
-				return
-			end
-		end
-	end
-
-	-- Envenom
-	if ka.envenom and cP >= 1 then
-		local Eactive, EtimeLeft = RoguePoker:IsActive(RoguePoker.name[2])
-		local EneedsRefresh = (not Eactive) or (Eactive and EtimeLeft > 0.5 and EtimeLeft < 2)
-		if EneedsRefresh then
-			if not RoguePoker:ShouldWait(RoguePoker.name[2]) then
-				CastSpellByName(RoguePoker.name[2])
-				return
-			end
-		end
-	end
-
-	-- ---- Combo Builder ----
-	if not RoguePoker:ShouldWait(builder) then
-		CastSpellByName(builder)
-	end
-end
-
--- Throw / Deadly Throw
-function RoguePoker:Throw()
-	local DTStart, DTduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[15]), BOOKTYPE_SPELL)
-	if RoguePoker:AtRange() then
-		if DTduration == 0 then
-			if not RoguePoker:ShouldWait(RoguePoker.name[15]) then
-				CastSpellByName(RoguePoker.name[15])
-			end
-		else
-			CastSpellByName(RoguePoker.name[16])
-		end
-		return true
-	end
-	return false
-end
-
--- Interrupt rotation
-function RoguePoker:Interrupt()
-	local _, Kduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[12]), BOOKTYPE_SPELL)
-	local _, Gduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[13]), BOOKTYPE_SPELL)
-	local _, Bduration = GetSpellCooldown(RoguePoker:FindSpellid(RoguePoker.name[14]), BOOKTYPE_SPELL)
-	if RoguePoker:Throw() then return end
-	if Kduration == 0 then
-		if not RoguePoker:ShouldWait(RoguePoker.name[12]) then
-			CastSpellByName(RoguePoker.name[12])
-			return
-		end
-	end
-	if Gduration == 0 then
-		if not RoguePoker:ShouldWait(RoguePoker.name[13]) then
-			CastSpellByName(RoguePoker.name[13])
-			AttackTarget()
-			return
-		end
-	end
-	if Bduration == 0 then
-		if not RoguePoker:ShouldWait(RoguePoker.name[14]) then
-			CastSpellByName(RoguePoker.name[14])
-			AttackTarget()
-			return
-		end
-	end
-end
-
--- RotaEvade wrapper
-function RoguePoker:RotaEvade()
-	RoguePoker:AssistPlayer()
-	RoguePoker:Rota()
 end
 
 -- ==========================================
--- UI
+-- UI Helpers
 -- ==========================================
-
-local UI = {}
-RoguePoker.UI = UI
-
-local function MakeLabel(parent, text, size, r, g, b)
-	local fs = parent:CreateFontString(nil, "OVERLAY", size or "GameFontNormal")
-	fs:SetText(text or "")
-	if r then fs:SetTextColor(r, g, b) end
-	return fs
-end
-
 local function MakeCheckbox(parent, label, x, y, getVal, setVal)
 	local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
 	cb:SetWidth(20)
@@ -684,11 +721,12 @@ local function MakeCheckbox(parent, label, x, y, getVal, setVal)
 	return cb, lbl
 end
 
--- ---- Main Frame ----
--- ---- Config Frame ----
+-- ==========================================
+-- Config Frame (tabbed)
+-- ==========================================
 local cfgFrame = CreateFrame("Frame", "RoguePokerConfigFrame", UIParent)
-cfgFrame:SetWidth(300)
-cfgFrame:SetHeight(450)
+cfgFrame:SetWidth(380)
+cfgFrame:SetHeight(620)
 cfgFrame:SetBackdrop({
 	bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
 	edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
@@ -707,7 +745,6 @@ cfgTitle:SetPoint("TOP", cfgFrame, "TOP", 0, -10)
 cfgTitle:SetText("RoguePoker Config")
 cfgTitle:SetTextColor(1, 0.82, 0)
 
--- Close button
 local closeBtn = CreateFrame("Button", nil, cfgFrame, "UIPanelButtonTemplate")
 closeBtn:SetWidth(60)
 closeBtn:SetHeight(20)
@@ -715,147 +752,426 @@ closeBtn:SetPoint("TOPRIGHT", cfgFrame, "TOPRIGHT", -8, -8)
 closeBtn:SetText("Close")
 closeBtn:SetScript("OnClick", function() cfgFrame:Hide() end)
 
+-- ==========================================
+-- Tab Panels
+-- ==========================================
+local tab1Panel = CreateFrame("Frame", nil, cfgFrame)
+tab1Panel:SetWidth(360)
+tab1Panel:SetHeight(550)
+tab1Panel:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 0, -50)
+tab1Panel:Show()
+
+local tab2Panel = CreateFrame("Frame", nil, cfgFrame)
+tab2Panel:SetWidth(360)
+tab2Panel:SetHeight(550)
+tab2Panel:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 0, -50)
+tab2Panel:Hide()
+
+-- Tab buttons
+local tab1Btn = CreateFrame("Button", nil, cfgFrame, "UIPanelButtonTemplate")
+tab1Btn:SetWidth(130)
+tab1Btn:SetHeight(22)
+tab1Btn:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 8, -30)
+tab1Btn:SetText("Rogue Rotation")
+
+local tab2Btn = CreateFrame("Button", nil, cfgFrame, "UIPanelButtonTemplate")
+tab2Btn:SetWidth(100)
+tab2Btn:SetHeight(22)
+tab2Btn:SetPoint("LEFT", tab1Btn, "RIGHT", 4, 0)
+tab2Btn:SetText("Interrupt")
+
+local function ShowTab(tabNum)
+	if tabNum == 1 then
+		tab1Panel:Show()
+		tab2Panel:Hide()
+		tab1Btn:SetAlpha(1.0)
+		tab2Btn:SetAlpha(0.6)
+	else
+		tab1Panel:Hide()
+		tab2Panel:Show()
+		tab1Btn:SetAlpha(0.6)
+		tab2Btn:SetAlpha(1.0)
+	end
+end
+
+tab1Btn:SetScript("OnClick", function() ShowTab(1) end)
+tab2Btn:SetScript("OnClick", function() ShowTab(2) end)
+
+-- ==========================================
+-- TAB 1: Rogue Rotation
+-- ==========================================
+
 -- ---- Section: Combo Builder ----
-local builderTitle = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-builderTitle:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 10, -38)
+local builderTitle = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+builderTitle:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, -8)
 builderTitle:SetText("Combo Builder:")
 builderTitle:SetTextColor(0.6, 0.8, 1)
 
-local builders = {
-	{ label = "Noxious Assault", key = "Noxious Assault" },
-	{ label = "Sinister Strike",  key = "Sinister Strike" },
-	{ label = "Backstab",         key = "Backstab" },
-	{ label = "Hemorrhage",       key = "Hemorrhage" },
-}
+local knownBuilders = {}
+local builderBtns   = {}
 
-local builderBtns = {}
-local bX = 10
-for _, b in ipairs(builders) do
-	local btn = CreateFrame("Button", nil, cfgFrame, "UIPanelButtonTemplate")
-	btn:SetWidth(66)
-	btn:SetHeight(18)
-	btn:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", bX, -55)
-	btn:SetText(b.label == "Noxious Assault" and "Noxious" or b.label)
-	local bKey = b.key
-	btn:SetScript("OnClick", function()
-		RoguePokerDB.comboBuilder = bKey
-		-- highlight selected
-		for _, bb in ipairs(builderBtns) do
-			bb:SetAlpha(bb.key == bKey and 1.0 or 0.55)
+local function RebuildBuilderButtons()
+	for _, btn in ipairs(builderBtns) do btn:Hide() end
+	builderBtns = {}
+	local bX = 10
+	for _, name in ipairs(knownBuilders) do
+		local bName = name
+		local shortLabel = name
+		if name == "Noxious Assault" then shortLabel = "Noxious" end
+		if name == "Sinister Strike" then shortLabel = "Sinister" end
+		if name == "Hemorrhage"      then shortLabel = "Hemmorh" end
+		local btn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+		btn:SetWidth(82)
+		btn:SetHeight(18)
+		btn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", bX, -24)
+		btn:SetText(shortLabel)
+		btn.key = bName
+		btn:SetScript("OnClick", function()
+			RoguePokerDB.comboBuilder = bName
+			for _, bb in ipairs(builderBtns) do
+				bb:SetAlpha(bb.key == bName and 1.0 or 0.55)
+			end
+		end)
+		table.insert(builderBtns, btn)
+		bX = bX + 86
+	end
+end
+
+local function UpdateBuilderHighlight()
+	if not RoguePokerDB then return end
+	for _, bb in ipairs(builderBtns) do
+		bb:SetAlpha(bb.key == RoguePokerDB.comboBuilder and 1.0 or 0.55)
+	end
+end
+
+-- ---- Section: Finishers ----
+local finisherTitle = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+finisherTitle:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, -50)
+finisherTitle:SetText("Finishers (priority order, top = first):")
+finisherTitle:SetTextColor(0.6, 0.8, 1)
+
+local finisherRows = {}
+
+local function RefreshFinisherRows()
+	for _, row in ipairs(finisherRows) do
+		for _, widget in pairs(row) do widget:Hide() end
+	end
+	finisherRows = {}
+	local db = RoguePokerDB
+	if not db or not db.finishers then return end
+	for idx, fin in ipairs(db.finishers) do
+		local y = -66 - (idx - 1) * 26
+		local row = {}
+		local finIdx = idx
+		local isConditional = (fin.kind == "conditional")
+
+		local cb = CreateFrame("CheckButton", nil, tab1Panel, "UICheckButtonTemplate")
+		cb:SetWidth(20)
+		cb:SetHeight(20)
+		cb:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, y)
+		cb:SetChecked(fin.enabled)
+		cb:SetScript("OnClick", function()
+			RoguePokerDB.finishers[finIdx].enabled = (cb:GetChecked() == 1)
+		end)
+		row.cb = cb
+
+		local nameLabel = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		nameLabel:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 34, y - 2)
+		nameLabel:SetText(fin.name)
+		nameLabel:SetTextColor(0.9, 0.9, 0.9)
+		nameLabel:SetWidth(110)
+		row.nameLabel = nameLabel
+
+		if isConditional then
+			local procLabel = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+			procLabel:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 150, y - 2)
+			procLabel:SetText("(on proc)")
+			procLabel:SetTextColor(0.6, 1, 0.6)
+			procLabel:SetWidth(60)
+			row.procLabel = procLabel
+		else
+			local minusBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+			minusBtn:SetWidth(18)
+			minusBtn:SetHeight(18)
+			minusBtn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 150, y)
+			minusBtn:SetText("-")
+			row.minusBtn = minusBtn
+
+			local cpLabel = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+			cpLabel:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 172, y - 2)
+			cpLabel:SetText(fin.minCP .. "CP")
+			cpLabel:SetTextColor(1, 0.8, 0.2)
+			cpLabel:SetWidth(28)
+			row.cpLabel = cpLabel
+
+			local plusBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+			plusBtn:SetWidth(18)
+			plusBtn:SetHeight(18)
+			plusBtn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 202, y)
+			plusBtn:SetText("+")
+			row.plusBtn = plusBtn
+
+			local function updateCP(delta)
+				local newCP = RoguePokerDB.finishers[finIdx].minCP + delta
+				if newCP < 1 then newCP = 1 end
+				if newCP > 5 then newCP = 5 end
+				RoguePokerDB.finishers[finIdx].minCP = newCP
+				cpLabel:SetText(newCP .. "CP")
+			end
+			minusBtn:SetScript("OnClick", function() updateCP(-1) end)
+			plusBtn:SetScript("OnClick",  function() updateCP(1)  end)
 		end
-	end)
-	btn.key = b.key
-	table.insert(builderBtns, btn)
-	bX = bX + 70
+
+		local upBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+		upBtn:SetWidth(22)
+		upBtn:SetHeight(18)
+		upBtn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 232, y)
+		upBtn:SetText("^")
+		upBtn:SetScript("OnClick", function()
+			if finIdx > 1 then
+				local t = RoguePokerDB.finishers
+				t[finIdx], t[finIdx - 1] = t[finIdx - 1], t[finIdx]
+				RefreshFinisherRows()
+			end
+		end)
+		row.upBtn = upBtn
+
+		local downBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+		downBtn:SetWidth(22)
+		downBtn:SetHeight(18)
+		downBtn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 256, y)
+		downBtn:SetText("v")
+		downBtn:SetScript("OnClick", function()
+			local t = RoguePokerDB.finishers
+			if finIdx < table.getn(t) then
+				t[finIdx], t[finIdx + 1] = t[finIdx + 1], t[finIdx]
+				RefreshFinisherRows()
+			end
+		end)
+		row.downBtn = downBtn
+
+		table.insert(finisherRows, row)
+	end
 end
 
--- ---- Section: Combo Threshold ----
-local thresholdLabel = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-thresholdLabel:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 10, -82)
-thresholdLabel:SetText("Finisher at CP: 5")
-thresholdLabel:SetTextColor(0.6, 0.8, 1)
+-- ---- Section: Evasion ----
+local evasionTitle = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+evasionTitle:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, -290)
+evasionTitle:SetText("Evasion (priority order, top = first):")
+evasionTitle:SetTextColor(1, 0.5, 0.3)
 
-local threshSlider = CreateFrame("Slider", "RoguePokerThreshSlider", cfgFrame, "OptionsSliderTemplate")
-threshSlider:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 10, -100)
-threshSlider:SetWidth(200)
-threshSlider:SetHeight(16)
-threshSlider:SetMinMaxValues(1, 5)
-threshSlider:SetValueStep(1)
-getglobal(threshSlider:GetName() .. "Low"):SetText("1")
-getglobal(threshSlider:GetName() .. "High"):SetText("5")
-getglobal(threshSlider:GetName() .. "Text"):SetText("")
-threshSlider:SetScript("OnValueChanged", function()
-	local v = math.floor(threshSlider:GetValue())
-	RoguePokerDB.comboThreshold = v
-	thresholdLabel:SetText("Finisher at CP: " .. v)
-end)
+local evasionRows = {}
 
--- ---- Section: Keep Active Buffs ----
-local kaTitle = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-kaTitle:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 10, -124)
-kaTitle:SetText("Keep Active:")
-kaTitle:SetTextColor(0.6, 0.8, 1)
+local function RefreshEvasionRows()
+	for _, row in ipairs(evasionRows) do
+		for _, widget in pairs(row) do widget:Hide() end
+	end
+	evasionRows = {}
+	local db = RoguePokerDB
+	if not db or not db.evasion then return end
+	for idx, ev in ipairs(db.evasion) do
+		local y = -306 - (idx - 1) * 26
+		local row = {}
+		local evIdx = idx
 
-local keepActiveData = {
-	{ key = "sliceAndDice", label = "Slice and Dice" },
-	{ key = "envenom",      label = "Envenom" },
-	{ key = "rupture",      label = "Rupture" },
-}
+		local cb = CreateFrame("CheckButton", nil, tab1Panel, "UICheckButtonTemplate")
+		cb:SetWidth(20)
+		cb:SetHeight(20)
+		cb:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, y)
+		cb:SetChecked(ev.enabled)
+		cb:SetScript("OnClick", function()
+			RoguePokerDB.evasion[evIdx].enabled = (cb:GetChecked() == 1)
+		end)
+		row.cb = cb
 
-local kaCBs = {}
-for idx, d in ipairs(keepActiveData) do
-	local cx = 10 + (idx - 1) * 90
-	local cy = -142
-	local dKey = d.key
-	local cb, lbl = MakeCheckbox(cfgFrame, d.label, cx, cy,
-		function() return RoguePokerDB.keepActive and RoguePokerDB.keepActive[dKey] end,
-		function(v) if RoguePokerDB.keepActive then RoguePokerDB.keepActive[dKey] = v end end
-	)
-	kaCBs[dKey] = cb
+		local nameLabel = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		nameLabel:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 34, y - 2)
+		nameLabel:SetText(ev.name)
+		nameLabel:SetTextColor(0.9, 0.9, 0.9)
+		nameLabel:SetWidth(110)
+		row.nameLabel = nameLabel
+
+		-- Up/Down buttons (always present, same position for all rows)
+		local upBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+		upBtn:SetWidth(22)
+		upBtn:SetHeight(18)
+		upBtn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 148, y)
+		upBtn:SetText("^")
+		upBtn:SetScript("OnClick", function()
+			if evIdx > 1 then
+				local t = RoguePokerDB.evasion
+				t[evIdx], t[evIdx - 1] = t[evIdx - 1], t[evIdx]
+				RefreshEvasionRows()
+			end
+		end)
+		row.upBtn = upBtn
+
+		local downBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+		downBtn:SetWidth(22)
+		downBtn:SetHeight(18)
+		downBtn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 172, y)
+		downBtn:SetText("v")
+		downBtn:SetScript("OnClick", function()
+			local t = RoguePokerDB.evasion
+			if evIdx < table.getn(t) then
+				t[evIdx], t[evIdx + 1] = t[evIdx + 1], t[evIdx]
+				RefreshEvasionRows()
+			end
+		end)
+		row.downBtn = downBtn
+
+		-- Health threshold controls for Evasion and Vanish (after reorder buttons)
+		if ev.name == "Evasion" or ev.name == "Vanish" then
+			local minusBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+			minusBtn:SetWidth(18)
+			minusBtn:SetHeight(18)
+			minusBtn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 200, y)
+			minusBtn:SetText("-")
+			row.minusBtn = minusBtn
+
+			local hpLabel = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+			hpLabel:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 221, y - 2)
+			hpLabel:SetText((ev.healthPct or 50) .. "%")
+			hpLabel:SetTextColor(1, 0.4, 0.4)
+			hpLabel:SetWidth(32)
+			row.hpLabel = hpLabel
+
+			local plusBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
+			plusBtn:SetWidth(18)
+			plusBtn:SetHeight(18)
+			plusBtn:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 255, y)
+			plusBtn:SetText("+")
+			row.plusBtn = plusBtn
+
+			local function updateHP(delta)
+				local cur = RoguePokerDB.evasion[evIdx].healthPct or 50
+				local newHP = cur + delta
+				if newHP < 5   then newHP = 5   end
+				if newHP > 100 then newHP = 100 end
+				RoguePokerDB.evasion[evIdx].healthPct = newHP
+				hpLabel:SetText(newHP .. "%")
+			end
+			minusBtn:SetScript("OnClick", function() updateHP(-5) end)
+			plusBtn:SetScript("OnClick",  function() updateHP(5)  end)
+		end
+
+		table.insert(evasionRows, row)
+	end
 end
 
--- ---- Section: Tank Abilities ----
-local tankTitle = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-tankTitle:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 10, -174)
-tankTitle:SetText("When Mob Targets Me:")
-tankTitle:SetTextColor(1, 0.5, 0.3)
+-- ---- Section: Options (Tab 1) ----
+local optionsY = -470
 
-local tankData = {
-	{ key = "ghostlyStrike", label = "Ghostly Strike" },
-	{ key = "flourish",      label = "Flourish" },
-	{ key = "evasion",       label = "Evasion" },
-	{ key = "feint",         label = "Feint" },
-	{ key = "vanish",        label = "Vanish" },
-}
+local optTitle = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+optTitle:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, optionsY)
+optTitle:SetText("Options:")
+optTitle:SetTextColor(0.6, 0.8, 1)
 
-local tankCBs = {}
-for idx, d in ipairs(tankData) do
-	local col = (idx <= 3) and 0 or 1
-	local row = (idx <= 3) and (idx - 1) or (idx - 4)
-	local cx = 10 + col * 140
-	local cy = -192 - row * 22
-	local dKey = d.key
-	local cb, lbl = MakeCheckbox(cfgFrame, d.label, cx, cy,
-		function() return RoguePokerDB.tankAbilities and RoguePokerDB.tankAbilities[dKey] end,
-		function(v) if RoguePokerDB.tankAbilities then RoguePokerDB.tankAbilities[dKey] = v end end
-	)
-	tankCBs[dKey] = cb
+local alwaysFeintCB, _ = MakeCheckbox(tab1Panel, "Always Feint (reduces threat)", 10, optionsY - 18,
+	function() return RoguePokerDB and RoguePokerDB.alwaysFeint end,
+	function(v) if RoguePokerDB then RoguePokerDB.alwaysFeint = v end end)
+
+local insigniaCB, _ = MakeCheckbox(tab1Panel, "Use Insignia when stunned", 10, optionsY - 40,
+	function() return RoguePokerDB and RoguePokerDB.useInsignia end,
+	function(v) if RoguePokerDB then RoguePokerDB.useInsignia = v end end)
+
+-- ==========================================
+-- TAB 2: Interrupt
+-- ==========================================
+
+local intTitle = tab2Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+intTitle:SetPoint("TOPLEFT", tab2Panel, "TOPLEFT", 10, -8)
+intTitle:SetText("Interrupt Abilities (priority order, top = first):")
+intTitle:SetTextColor(0.6, 0.8, 1)
+
+local intNote = tab2Panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+intNote:SetPoint("TOPLEFT", tab2Panel, "TOPLEFT", 10, -24)
+intNote:SetText("Falls through to next if ability is on cooldown or out of range.")
+intNote:SetTextColor(0.6, 0.6, 0.6)
+
+local interruptRows = {}
+
+local function RefreshInterruptRows()
+	for _, row in ipairs(interruptRows) do
+		for _, widget in pairs(row) do widget:Hide() end
+	end
+	interruptRows = {}
+	local db = RoguePokerDB
+	if not db or not db.interrupt then return end
+	for idx, ab in ipairs(db.interrupt) do
+		local y = -44 - (idx - 1) * 26
+		local row = {}
+		local abIdx = idx
+		local isRanged = (ab.name == "Deadly Throw" or ab.name == "Throw/Shoot")
+
+		local cb = CreateFrame("CheckButton", nil, tab2Panel, "UICheckButtonTemplate")
+		cb:SetWidth(20)
+		cb:SetHeight(20)
+		cb:SetPoint("TOPLEFT", tab2Panel, "TOPLEFT", 10, y)
+		cb:SetChecked(ab.enabled)
+		cb:SetScript("OnClick", function()
+			RoguePokerDB.interrupt[abIdx].enabled = (cb:GetChecked() == 1)
+		end)
+		row.cb = cb
+
+		local nameLabel = tab2Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		nameLabel:SetPoint("TOPLEFT", tab2Panel, "TOPLEFT", 34, y - 2)
+		nameLabel:SetText(ab.name)
+		nameLabel:SetTextColor(0.9, 0.9, 0.9)
+		nameLabel:SetWidth(130)
+		row.nameLabel = nameLabel
+
+		if isRanged then
+			local rangeLabel = tab2Panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+			rangeLabel:SetPoint("TOPLEFT", tab2Panel, "TOPLEFT", 170, y - 2)
+			rangeLabel:SetText("(range check)")
+			rangeLabel:SetTextColor(0.6, 0.8, 1)
+			row.rangeLabel = rangeLabel
+		end
+
+		local upBtn = CreateFrame("Button", nil, tab2Panel, "UIPanelButtonTemplate")
+		upBtn:SetWidth(22)
+		upBtn:SetHeight(18)
+		upBtn:SetPoint("TOPLEFT", tab2Panel, "TOPLEFT", 270, y)
+		upBtn:SetText("^")
+		upBtn:SetScript("OnClick", function()
+			if abIdx > 1 then
+				local t = RoguePokerDB.interrupt
+				t[abIdx], t[abIdx - 1] = t[abIdx - 1], t[abIdx]
+				RefreshInterruptRows()
+			end
+		end)
+		row.upBtn = upBtn
+
+		local downBtn = CreateFrame("Button", nil, tab2Panel, "UIPanelButtonTemplate")
+		downBtn:SetWidth(22)
+		downBtn:SetHeight(18)
+		downBtn:SetPoint("TOPLEFT", tab2Panel, "TOPLEFT", 294, y)
+		downBtn:SetText("v")
+		downBtn:SetScript("OnClick", function()
+			local t = RoguePokerDB.interrupt
+			if abIdx < table.getn(t) then
+				t[abIdx], t[abIdx + 1] = t[abIdx + 1], t[abIdx]
+				RefreshInterruptRows()
+			end
+		end)
+		row.downBtn = downBtn
+
+		table.insert(interruptRows, row)
+	end
 end
 
--- ---- Section: Tanking Mode ----
-local tankingModeTitle = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-tankingModeTitle:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 10, -258)
-tankingModeTitle:SetText("Tanking Mode:")
-tankingModeTitle:SetTextColor(1, 0.5, 0.3)
+-- ==========================================
+-- Version label
+-- ==========================================
+local versionLabel = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+versionLabel:SetPoint("BOTTOMRIGHT", cfgFrame, "BOTTOMRIGHT", -8, 8)
+versionLabel:SetText("v1.0.3")
+versionLabel:SetTextColor(0.5, 0.5, 0.5)
 
-local tankingModeCB, tankingModeLbl = MakeCheckbox(cfgFrame, "Always use tank rotation (no Feint)", 10, -276,
-	function() return RoguePokerDB.tankingMode end,
-	function(v) RoguePokerDB.tankingMode = v end
-)
-
--- ---- Section: Always Feint ----
-local alwaysFeintTitle = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-alwaysFeintTitle:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 10, -306)
-alwaysFeintTitle:SetText("Threat Management:")
-alwaysFeintTitle:SetTextColor(0.6, 0.8, 1)
-
-local alwaysFeintCB, alwaysFeintLbl = MakeCheckbox(cfgFrame, "Always Feint (reduces threat)", 10, -324,
-	function() return RoguePokerDB.alwaysFeint end,
-	function(v) RoguePokerDB.alwaysFeint = v end
-)
-
--- ---- Section: PvP Trinket ----
-local insigniaTitle = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-insigniaTitle:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 10, -350)
-insigniaTitle:SetText("PvP Trinket:")
-insigniaTitle:SetTextColor(0.6, 0.8, 1)
-
-local insigniaCB, insigniaLbl = MakeCheckbox(cfgFrame, "Use Insignia of the Horde when stunned", 10, -368,
-	function() return RoguePokerDB.useInsignia end,
-	function(v) RoguePokerDB.useInsignia = v end
-)
-
--- Save button
+-- ==========================================
+-- Save Button (shared)
+-- ==========================================
 local saveBtn = CreateFrame("Button", nil, cfgFrame, "UIPanelButtonTemplate")
 saveBtn:SetWidth(80)
 saveBtn:SetHeight(24)
@@ -866,7 +1182,9 @@ saveBtn:SetScript("OnClick", function()
 	print("RoguePoker: Settings saved.")
 end)
 
--- Keep builder buttons highlighted correctly when config is open
+-- ==========================================
+-- Update Loop
+-- ==========================================
 local updateFrame = CreateFrame("Frame")
 local elapsed = 0
 updateFrame:SetScript("OnUpdate", function()
@@ -874,45 +1192,74 @@ updateFrame:SetScript("OnUpdate", function()
 	if elapsed < 0.3 then return end
 	elapsed = 0
 	if not RoguePokerDB or not cfgFrame:IsShown() then return end
-	if RoguePokerDB.comboBuilder then
-		for _, bb in ipairs(builderBtns) do
-			bb:SetAlpha(bb.key == RoguePokerDB.comboBuilder and 1.0 or 0.55)
-		end
-	end
+	UpdateBuilderHighlight()
 end)
 
 -- ==========================================
 -- Load Event
 -- ==========================================
+-- VARIABLES_LOADED: init DB only (spellbook not ready yet)
 local loadFrame = CreateFrame("Frame")
 loadFrame:RegisterEvent("VARIABLES_LOADED")
+loadFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 loadFrame:SetScript("OnEvent", function()
-	InitDB()
+	if event == "VARIABLES_LOADED" then
+		InitDB()
 
+	elseif event == "PLAYER_ENTERING_WORLD" then
+		if not RoguePokerDB then return end
 
-	-- Restore threshold slider
-	threshSlider:SetValue(RoguePokerDB.comboThreshold or 5)
-	thresholdLabel:SetText("Finisher at CP: " .. (RoguePokerDB.comboThreshold or 5))
+		-- Spellbook is ready now - filter lists to known spells
+		knownBuilders = RoguePoker:FilterKnown(RoguePoker.BUILDERS)
 
-	-- Restore checkboxes
-	for k, cb in pairs(kaCBs) do
-		cb:SetChecked(RoguePokerDB.keepActive[k])
+		-- Filter finishers to known spells
+		local knownFinishers = {}
+		for _, fin in ipairs(RoguePokerDB.finishers) do
+			if RoguePoker:HasSpell(fin.name) then
+				knownFinishers[table.getn(knownFinishers) + 1] = fin
+			end
+		end
+		RoguePokerDB.finishers = knownFinishers
+
+		-- Filter evasion to known spells
+		local knownEvasion = {}
+		for _, ev in ipairs(RoguePokerDB.evasion) do
+			if RoguePoker:HasSpell(ev.name) then
+				knownEvasion[table.getn(knownEvasion) + 1] = ev
+			end
+		end
+		RoguePokerDB.evasion = knownEvasion
+
+		-- Filter interrupt to known spells (Throw always included)
+		local knownInterrupt = {}
+		for _, ab in ipairs(RoguePokerDB.interrupt) do
+			local abKnown = RoguePoker:HasSpell(ab.name)
+			if ab.name == "Throw/Shoot" then
+				abKnown = RoguePoker:HasSpell("Throw") or RoguePoker:HasSpell("Shoot Bow") or RoguePoker:HasSpell("Shoot Crossbow") or RoguePoker:HasSpell("Shoot Gun") or RoguePoker:HasSpell("Shoot")
+			end
+			if abKnown then
+				knownInterrupt[table.getn(knownInterrupt) + 1] = ab
+			end
+		end
+		RoguePokerDB.interrupt = knownInterrupt
+
+		-- Build UI
+		RebuildBuilderButtons()
+		UpdateBuilderHighlight()
+		RefreshFinisherRows()
+		RefreshEvasionRows()
+		RefreshInterruptRows()
+		ShowTab(1)
+
+		-- Restore option checkboxes
+		alwaysFeintCB:SetChecked(RoguePokerDB.alwaysFeint)
+		insigniaCB:SetChecked(RoguePokerDB.useInsignia)
+
+		print("|cFFFFD700RoguePoker|r loaded successfully!")
+		print("Type |cFFFFD700/rp|r to open the configuration panel.")
+		print("Use |cFFFFD700/script RoguePoker:Rota()|r in a macro for the rotation.")
+		print("Use |cFFFFD700/script RoguePoker:Interrupt()|r in a macro for interrupts.")
 	end
-	for k, cb in pairs(tankCBs) do
-		cb:SetChecked(RoguePokerDB.tankAbilities[k])
-	end
-	insigniaCB:SetChecked(RoguePokerDB.useInsignia)
-	tankingModeCB:SetChecked(RoguePokerDB.tankingMode)
-	alwaysFeintCB:SetChecked(RoguePokerDB.alwaysFeint)
-
-	-- Highlight active builder
-	for _, bb in ipairs(builderBtns) do
-		bb:SetAlpha(bb.key == RoguePokerDB.comboBuilder and 1.0 or 0.55)
-	end
-
-	print("|cFFFFD700RoguePoker|r loaded successfully!")
-	print("Type |cFFFFD700/rp|r to open the configuration panel.")
-	print("Use |cFFFFD700/script RoguePoker:Rota()|r in a macro to run the rotation.")
 end)
 
 -- ==========================================

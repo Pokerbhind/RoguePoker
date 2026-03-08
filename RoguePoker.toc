@@ -1,10 +1,10 @@
-## Interface: 11800
+## Interface: 1.18.00
 ## Title: RoguePoker |cFFFF8080-Pokerbhind-|r
 ## Title-deDE: RoguePoker |cFFFF8080-Pokerbhind-|r
 ## Notes: RoguePoker provides an function to make the rogue a "One-Button-Class"
 ## Notes-deDE: [TO BE EDITED]
 ## Author: Pokerbhind
-## Version: 0.2
+## Version: 1.0.3
 
 ## SavedVariables: RoguePokerDB
 RoguePoker.lua
