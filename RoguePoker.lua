@@ -520,24 +520,32 @@ function RoguePoker:Rota()
 							return
 						end
 
-					-- Evasion: only below configured health threshold
+					-- Evasion: only below configured health threshold, not if GS/Flourish active
 					elseif name == "Evasion" then
 						local ph = UnitHealth("player")
 						local phMax = UnitHealthMax("player")
 						local phPct = (phMax > 0) and (100 * ph / phMax) or 100
 						local threshold = ev.healthPct or 50
 						local active, timeLeft = RoguePoker:IsActive(name)
-						if dur == 0 and phPct < threshold and (not active or timeLeft <= 2) then
+						-- Don't override Ghostly Strike or Flourish if still active > 2s
+						local otherActive = false
+						for _, ev2 in ipairs(db.evasion) do
+							if ev2.name ~= "Feint" and ev2.name ~= "Vanish" and ev2.name ~= "Evasion" then
+								local a, t = RoguePoker:IsActive(ev2.name)
+								if a and t > 2 then otherActive = true break end
+							end
+						end
+						if dur == 0 and phPct < threshold and not otherActive and (not active or timeLeft <= 2) then
 							CastSpellByName(name)
 							return
 						end
 
-					-- Ghostly Strike / Flourish: one-buff-at-a-time rule
+					-- Ghostly Strike / Flourish: one-buff-at-a-time rule with Evasion
 					else
-						-- Check if any non-Feint evasion buff is already active > 2s
+						-- Check if any evasion buff (including Evasion itself) is already active > 2s
 						local buffActive = false
 						for _, ev2 in ipairs(db.evasion) do
-							if ev2.name ~= "Feint" and ev2.name ~= "Vanish" and ev2.name ~= "Evasion" then
+							if ev2.name ~= "Feint" and ev2.name ~= "Vanish" then
 								local a, t = RoguePoker:IsActive(ev2.name)
 								if a and t > 2 then buffActive = true break end
 							end
@@ -1278,7 +1286,7 @@ end
 -- ==========================================
 local versionLabel = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 versionLabel:SetPoint("BOTTOMRIGHT", cfgFrame, "BOTTOMRIGHT", -8, 8)
-versionLabel:SetText("v1.1.1")
+versionLabel:SetText("v1.1.2")
 versionLabel:SetTextColor(0.5, 0.5, 0.5)
 
 -- ==========================================
@@ -1336,14 +1344,15 @@ loadFrame:SetScript("OnEvent", function()
 
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		if not RoguePokerDB then return end
-		if not RoguePoker.initialized then
-			RoguePoker.initialized = true
-			RoguePoker:ScanAndRebuild()
-			print("|cFFFFD700RoguePoker|r loaded successfully!")
-			print("Type |cFFFFD700/rp|r to open the configuration panel.")
-			print("Use |cFFFFD700/script RoguePoker:Rota()|r in a macro for the rotation.")
-			print("Use |cFFFFD700/script RoguePoker:Interrupt()|r in a macro for interrupts.")
-		end
+		knownBuilders = RoguePoker:FilterKnown(RoguePoker.BUILDERS)
+		RebuildBuilderButtons()
+		UpdateBuilderHighlight()
+		RefreshFinisherRows()
+		RefreshEvasionRows()
+		RefreshInterruptRows()
+		alwaysFeintCB:SetChecked(RoguePokerDB.alwaysFeint)
+		insigniaCB:SetChecked(RoguePokerDB.useInsignia)
+		print("|cFFFFD700RoguePoker|r loaded. Type |cFFFFD700/rp|r to configure.")
 	end
 end)
 
