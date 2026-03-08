@@ -6,5 +6,5 @@ All options are configurable in-game via /rp.
 ## Installing ##   
 1. Download the folder and rename it into RoguePoker   
 2. Configure your settings using /rp
-3. Make this macro: /script RoguePoker:Rota()
-4. Spam press this macro
+3. Make this macro for the main Rogue Rotation: /script RoguePoker:Rota()
+4. Make this macro to execute the interrupt options: /script RoguePoker:Interrupt()
