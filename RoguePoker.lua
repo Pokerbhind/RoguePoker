@@ -59,12 +59,12 @@ RoguePoker.EVASION_DEFAULTS = {
 
 -- Interrupt abilities master list
 RoguePoker.INTERRUPT_DEFAULTS = {
-	{ name = "Kick" },
-	{ name = "Gouge" },
-	{ name = "Kidney Shot", minCP = 1 },
-	{ name = "Blind" },
 	{ name = "Deadly Throw" },
 	{ name = "Throw/Shoot" },
+	{ name = "Kick" },
+	{ name = "Kidney Shot", minCP = 1 },
+	{ name = "Gouge" },
+	{ name = "Blind" },
 }
 
 -- Energy costs for ShouldWait check
@@ -136,7 +136,7 @@ local defaults = {
 		{ name = "Slice and Dice",  minCP = 1, enabled = true,  kind = "buff" },
 		{ name = "Envenom",         minCP = 1, enabled = true,  kind = "buff" },
 		{ name = "Rupture",         minCP = 5, enabled = true,  kind = "dot" },
-		{ name = "Expose Armor",    minCP = 5, enabled = true,  kind = "dot" },
+		{ name = "Expose Armor",    minCP = 5, enabled = false, kind = "dot" },
 		{ name = "Shadow of Death", minCP = 5, enabled = true,  kind = "dot" },
 		{ name = "Eviscerate",      minCP = 5, enabled = true,  kind = "damage" },
 		{ name = "Riposte",         minCP = 0, enabled = true,  kind = "conditional" },
@@ -148,16 +148,16 @@ local defaults = {
 		{ name = "Ghostly Strike", enabled = true },
 		{ name = "Flourish",       enabled = true },
 		{ name = "Evasion",        enabled = true,  healthPct = 50 },
-		{ name = "Vanish",         enabled = false, healthPct = 20 },
+		{ name = "Vanish",         enabled = true,  healthPct = 20 },
 	},
 	-- interrupt: ordered list of { name, enabled }
 	interrupt = {
-		{ name = "Kick",          enabled = true,  minCP = nil },
-		{ name = "Gouge",         enabled = true,  minCP = nil },
-		{ name = "Kidney Shot", enabled = true,  minCP = 1   },
-		{ name = "Blind",         enabled = false, minCP = nil },
 		{ name = "Deadly Throw",  enabled = true,  minCP = nil },
 		{ name = "Throw/Shoot",   enabled = true,  minCP = nil },
+		{ name = "Kick",          enabled = true,  minCP = nil },
+		{ name = "Kidney Shot",   enabled = true,  minCP = 1   },
+		{ name = "Gouge",         enabled = true,  minCP = nil },
+		{ name = "Blind",         enabled = false, minCP = nil },
 	},
 }
 
@@ -1278,7 +1278,7 @@ end
 -- ==========================================
 local versionLabel = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 versionLabel:SetPoint("BOTTOMRIGHT", cfgFrame, "BOTTOMRIGHT", -8, 8)
-versionLabel:SetText("v1.1.0")
+versionLabel:SetText("v1.1.1")
 versionLabel:SetTextColor(0.5, 0.5, 0.5)
 
 -- ==========================================
@@ -1336,12 +1336,14 @@ loadFrame:SetScript("OnEvent", function()
 
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		if not RoguePokerDB then return end
-		RoguePoker:ScanAndRebuild()
-
-		print("|cFFFFD700RoguePoker|r loaded successfully!")
-		print("Type |cFFFFD700/rp|r to open the configuration panel.")
-		print("Use |cFFFFD700/script RoguePoker:Rota()|r in a macro for the rotation.")
-		print("Use |cFFFFD700/script RoguePoker:Interrupt()|r in a macro for interrupts.")
+		if not RoguePoker.initialized then
+			RoguePoker.initialized = true
+			RoguePoker:ScanAndRebuild()
+			print("|cFFFFD700RoguePoker|r loaded successfully!")
+			print("Type |cFFFFD700/rp|r to open the configuration panel.")
+			print("Use |cFFFFD700/script RoguePoker:Rota()|r in a macro for the rotation.")
+			print("Use |cFFFFD700/script RoguePoker:Interrupt()|r in a macro for interrupts.")
+		end
 	end
 end)
 
