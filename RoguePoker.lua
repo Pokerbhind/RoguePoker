@@ -137,6 +137,7 @@ local defaults = {
 	comboBuilder  = "Sinister Strike",
 	useInsignia   = true,
 	alwaysFeint   = false,
+	tankMode      = false,
 	-- finishers: ordered list of { name, minCP, enabled }
 	finishers = {
 		{ name = "Slice and Dice",  minCP = 1, enabled = true,  kind = "buff" },
@@ -193,6 +194,7 @@ local function InitDB()
 	if RoguePokerDB.comboBuilder  == nil then RoguePokerDB.comboBuilder  = defaults.comboBuilder  end
 	if RoguePokerDB.useInsignia   == nil then RoguePokerDB.useInsignia   = defaults.useInsignia   end
 	if RoguePokerDB.alwaysFeint   == nil then RoguePokerDB.alwaysFeint   = defaults.alwaysFeint   end
+	if RoguePokerDB.tankMode      == nil then RoguePokerDB.tankMode      = defaults.tankMode      end
 	if isEmpty(RoguePokerDB.finishers) then RoguePokerDB.finishers = deepCopy(defaults.finishers)  end
 	if isEmpty(RoguePokerDB.evasion)   then RoguePokerDB.evasion   = deepCopy(defaults.evasion)    end
 	if isEmpty(RoguePokerDB.interrupt) then RoguePokerDB.interrupt = deepCopy(defaults.interrupt)  end
@@ -537,7 +539,7 @@ function RoguePoker:Rota()
 
 
 	-- ---- Evasion / Tank abilities ----
-	if mobTargetsMe then
+	if mobTargetsMe or db.tankMode then
 		for _, ev in ipairs(db.evasion) do
 			if ev.enabled then
 				local name = ev.name
@@ -706,6 +708,10 @@ function RoguePoker:Rota()
 					end
 					-- Riposte only fires when parry proc is active
 					if name == "Riposte" then
+						if RoguePoker.riposteTime and (GetTime() - RoguePoker.riposteTime) > 3 then
+							RoguePoker.riposteReady = false
+							RoguePoker.riposteTime = nil
+						end
 						canFire = canFire and RoguePoker.riposteReady
 					end
 					if canFire then
@@ -715,6 +721,7 @@ function RoguePoker:Rota()
 								RoguePoker.surpriseAttackTime = nil
 							elseif name == "Riposte" then
 								RoguePoker.riposteReady = false
+								RoguePoker.riposteTime = nil
 							end
 							CastSpellByName(name)
 							return
@@ -1164,6 +1171,10 @@ evasionTitle:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, -290)
 evasionTitle:SetText("Evasion (priority order, top = first):")
 evasionTitle:SetTextColor(1, 0.5, 0.3)
 
+local tankModeCB, _ = MakeCheckbox(tab1Panel, "Tank Mode", 210, -290,
+	function() return RoguePokerDB and RoguePokerDB.tankMode end,
+	function(v) if RoguePokerDB then RoguePokerDB.tankMode = v end end)
+
 local evasionRows = {}
 
 local function RefreshEvasionRows()
@@ -1454,6 +1465,7 @@ function RoguePoker:ScanAndRebuild()
 	-- Restore option checkboxes
 	alwaysFeintCB:SetChecked(db.alwaysFeint)
 	insigniaCB:SetChecked(db.useInsignia)
+	tankModeCB:SetChecked(db.tankMode)
 end
 
 -- ==========================================
@@ -1461,7 +1473,7 @@ end
 -- ==========================================
 local versionLabel = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 versionLabel:SetPoint("BOTTOMRIGHT", cfgFrame, "BOTTOMRIGHT", -8, 8)
-versionLabel:SetText("v1.1.3")
+versionLabel:SetText("v1.1.4")
 versionLabel:SetTextColor(0.5, 0.5, 0.5)
 
 -- ==========================================
@@ -1517,6 +1529,7 @@ loadFrame:SetScript("OnEvent", function()
 		RoguePoker.surpriseAttackReady = false
 		RoguePoker.surpriseAttackTime = nil
 		RoguePoker.riposteReady = false
+		RoguePoker.riposteTime = nil
 		RoguePoker.shadowOfDeathPending = false
 		RoguePoker.shadowOfDeathPendingTime = nil
 	elseif event == "PLAYER_REGEN_ENABLED" then
@@ -1524,6 +1537,7 @@ loadFrame:SetScript("OnEvent", function()
 		RoguePoker.surpriseAttackReady = false
 		RoguePoker.surpriseAttackTime = nil
 		RoguePoker.riposteReady = false
+		RoguePoker.riposteTime = nil
 		RoguePoker.shadowOfDeathPending = false
 		RoguePoker.shadowOfDeathPendingTime = nil
 		RoguePoker.debuffExpiry = {}
@@ -1534,6 +1548,7 @@ loadFrame:SetScript("OnEvent", function()
 		end
 		if arg1 and string.find(arg1, "parr") then
 			RoguePoker.riposteReady = true
+			RoguePoker.riposteTime = GetTime()
 		end
 	elseif event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
 		if arg1 and string.find(arg1, "dodge") then
@@ -1542,6 +1557,7 @@ loadFrame:SetScript("OnEvent", function()
 		end
 		if arg1 and string.find(arg1, "parr") then
 			RoguePoker.riposteReady = true
+			RoguePoker.riposteTime = GetTime()
 		end
 	elseif event == "VARIABLES_LOADED" then
 		InitDB()
@@ -1566,6 +1582,7 @@ loadFrame:SetScript("OnEvent", function()
 		RefreshInterruptRows()
 		alwaysFeintCB:SetChecked(RoguePokerDB.alwaysFeint)
 		insigniaCB:SetChecked(RoguePokerDB.useInsignia)
+		tankModeCB:SetChecked(RoguePokerDB.tankMode)
 		print("|cFFFFD700RoguePoker|r loaded. Type |cFFFFD700/rp|r to configure.")
 	end
 end)
@@ -1575,12 +1592,27 @@ end)
 -- ==========================================
 SLASH_ROGUEPOKR1 = "/rp"
 SlashCmdList["ROGUEPOKR"] = function(msg)
-	if cfgFrame:IsShown() then
-		cfgFrame:Hide()
+	if msg == "help" then
+		print("|cFFFFD700RoguePoker|r - Rogue rotation helper for Turtle WoW")
+		print("|cFFFFD700What it does:|r")
+		print("  Automates your rogue rotation when you press a single macro button.")
+		print("  Manages combo builders, finishers, evasion cooldowns, and interrupts")
+		print("  in priority order. Procs like Surprise Attack and Riposte are detected")
+		print("  automatically via combat events and fire when available.")
+		print("|cFFFFD700Required macros:|r")
+		print("  |cFFAAAAAA/script RoguePoker:Rota()|r  -- Main rotation (bind to a key and spam)")
+		print("  |cFFAAAAAA/script RoguePoker:Interrupt()|r  -- Interrupt rotation (bind separately)")
+		print("|cFFFFD700Commands:|r")
+		print("  |cFFAAAAAA/rp|r        -- Toggle configuration panel")
+		print("  |cFFAAAAAA/rp help|r   -- Show this help text")
 	else
-		cfgFrame:ClearAllPoints()
-		cfgFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-		cfgFrame:Show()
+		if cfgFrame:IsShown() then
+			cfgFrame:Hide()
+		else
+			cfgFrame:ClearAllPoints()
+			cfgFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+			cfgFrame:Show()
+		end
 	end
 end
 
