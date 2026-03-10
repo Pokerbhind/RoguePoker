@@ -8,3 +8,4 @@ All options are configurable in-game via /rp.
 2. Configure your settings using /rp
 3. Make this macro for the main Rogue Rotation: /script RoguePoker:Rota()
 4. Make this macro to execute the interrupt options: /script RoguePoker:Interrupt()
+5. Use /rp help for in-game instructions and description
