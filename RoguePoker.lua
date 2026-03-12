@@ -134,11 +134,13 @@ end
 -- Default Settings
 -- ==========================================
 local defaults = {
-	comboBuilder  = "Sinister Strike",
-	useInsignia   = true,
-	alwaysFeint   = false,
-	tankMode      = false,
-	pvpMode       = false,
+	comboBuilder    = "Sinister Strike",
+	useInsignia     = true,
+	alwaysFeint     = false,
+	tankMode        = false,
+	pvpMode         = false,
+	autoAssist      = false,
+	autoAssistName  = "",
 	-- finishers: ordered list of { name, minCP, enabled }
 	finishers = {
 		{ name = "Slice and Dice",  minCP = 1, enabled = true,  kind = "buff" },
@@ -197,6 +199,8 @@ local function InitDB()
 	if RoguePokerDB.alwaysFeint   == nil then RoguePokerDB.alwaysFeint   = defaults.alwaysFeint   end
 	if RoguePokerDB.tankMode      == nil then RoguePokerDB.tankMode      = defaults.tankMode      end
 	if RoguePokerDB.pvpMode       == nil then RoguePokerDB.pvpMode       = defaults.pvpMode       end
+	if RoguePokerDB.autoAssist    == nil then RoguePokerDB.autoAssist    = defaults.autoAssist    end
+	if RoguePokerDB.autoAssistName == nil then RoguePokerDB.autoAssistName = defaults.autoAssistName end
 	if isEmpty(RoguePokerDB.finishers) then RoguePokerDB.finishers = deepCopy(defaults.finishers)  end
 	if isEmpty(RoguePokerDB.evasion)   then RoguePokerDB.evasion   = deepCopy(defaults.evasion)    end
 	if isEmpty(RoguePokerDB.interrupt) then RoguePokerDB.interrupt = deepCopy(defaults.interrupt)  end
@@ -204,7 +208,6 @@ local function InitDB()
 	if RoguePokerDB.interrupt then
 		for _, ab in ipairs(RoguePokerDB.interrupt) do
 			if ab.name == "Throw" then ab.name = "Throw/Shoot" end
-
 		end
 	end
 	RoguePokerDB.discoveredTextures = RoguePokerDB.discoveredTextures or {}
@@ -341,6 +344,21 @@ end
 
 function RoguePoker:AssistPlayer()
 	if UnitIsPlayer("target") then AssistUnit("target") end
+end
+
+function RoguePoker:AutoAssistTarget()
+	local db = RoguePokerDB
+	if not db.autoAssist then return end
+	local name = db.autoAssistName
+	if not name or name == "" then return end
+	-- Only act when we have no target at all
+	if UnitExists("target") then return end
+	-- AssistUnit only accepts unit tokens, so we target by name first,
+	-- then assist that target.
+	TargetByName(name)
+	if UnitExists("target") then
+		AssistUnit("target")
+	end
 end
 
 -- ==========================================
@@ -522,6 +540,7 @@ function RoguePoker:Rota()
 	if not db.pvpMode then
 		RoguePoker:AssistPlayer()
 	end
+	RoguePoker:AutoAssistTarget()
 
 	-- Insignia on bad status
 	if db.useInsignia and RoguePoker:IsBadStatus() then
@@ -624,9 +643,6 @@ function RoguePoker:Rota()
 	end
 
 	-- ---- Mark for Death + Shadow of Death combo ----
-	-- If both are enabled and ready, and we have (sodMinCP - 2) or more CP,
-	-- cast Mark for Death first to generate 2 CP and buff AP, then lock Shadow of Death next.
-	-- Exception: if Shadow of Death is disabled or not known, Mark for Death fires on its own.
 	if not RoguePoker.shadowOfDeathPending then
 		local mfdEntry, sodEntry = nil, nil
 		for _, fin in ipairs(db.finishers) do
@@ -742,15 +758,11 @@ function RoguePoker:Rota()
 
 			-- All other finishers require minimum CP
 			elseif cP >= minCP then
-				-- For Rupture, activity is indicated by "Taste for Blood" buff on player
-				-- For Expose Armor, check the debuff on the target
 				local active, timeLeft
 				if name == "Rupture" then
 					active, timeLeft = RoguePoker:IsActive("Taste for Blood")
 				elseif name == "Expose Armor" then
 					active, timeLeft = RoguePoker:IsActiveOnTarget("Expose Armor")
-					-- Failsafe: if CP threshold is met, do a live texture scan to confirm debuff is actually on target
-					-- If it's missing despite our timer saying active, reset and recast
 					if active and cP >= minCP then
 						local matchTexture = RoguePoker.targetDebuffTextures["Expose Armor"]
 						local found = false
@@ -766,7 +778,6 @@ function RoguePoker:Rota()
 							end
 						end
 						if not found then
-							-- Timer says active but debuff is gone - force recast
 							RoguePoker.debuffExpiry["Expose Armor"] = nil
 							active, timeLeft = false, 0
 						end
@@ -830,22 +841,19 @@ function RoguePoker:Interrupt()
 			local castName = name
 
 			if name == "Deadly Throw" then
-				-- Requires a thrown weapon equipped
 				local wtype = RoguePoker:GetRangedWeaponType()
 				if wtype ~= "Thrown" then
-					-- No thrown weapon, skip and fall through
 					castName = nil
 				end
 
 			elseif name == "Throw/Shoot" then
-				-- Resolve to the correct spell for the equipped ranged weapon
 				local wtype = RoguePoker:GetRangedWeaponType()
 				if     wtype == "Thrown"   then castName = "Throw"
 				elseif wtype == "Bow"      then castName = "Shoot Bow"
 				elseif wtype == "Crossbow" then castName = "Shoot Crossbow"
 				elseif wtype == "Gun"      then castName = "Shoot Gun"
 				elseif wtype == "Wand"     then castName = "Shoot"
-				else castName = nil  -- no ranged weapon equipped, skip
+				else castName = nil
 				end
 			end
 
@@ -856,7 +864,6 @@ function RoguePoker:Interrupt()
 			end
 
 			if castName then
-				-- Ranged abilities: check range first
 				if isRanged then
 					if RoguePoker:AtRange() then
 						local sid = RoguePoker:FindSpellid(castName)
@@ -988,6 +995,12 @@ tab2Panel:SetHeight(550)
 tab2Panel:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 0, -50)
 tab2Panel:Hide()
 
+local tab3Panel = CreateFrame("Frame", nil, cfgFrame)
+tab3Panel:SetWidth(360)
+tab3Panel:SetHeight(550)
+tab3Panel:SetPoint("TOPLEFT", cfgFrame, "TOPLEFT", 0, -50)
+tab3Panel:Hide()
+
 -- Tab buttons
 local tab1Btn = CreateFrame("Button", nil, cfgFrame, "UIPanelButtonTemplate")
 tab1Btn:SetWidth(130)
@@ -1001,22 +1014,40 @@ tab2Btn:SetHeight(22)
 tab2Btn:SetPoint("LEFT", tab1Btn, "RIGHT", 4, 0)
 tab2Btn:SetText("Interrupt")
 
+local tab3Btn = CreateFrame("Button", nil, cfgFrame, "UIPanelButtonTemplate")
+tab3Btn:SetWidth(80)
+tab3Btn:SetHeight(22)
+tab3Btn:SetPoint("LEFT", tab2Btn, "RIGHT", 4, 0)
+tab3Btn:SetText("Options")
+
 local function ShowTab(tabNum)
 	if tabNum == 1 then
 		tab1Panel:Show()
 		tab2Panel:Hide()
+		tab3Panel:Hide()
 		tab1Btn:SetAlpha(1.0)
 		tab2Btn:SetAlpha(0.6)
-	else
+		tab3Btn:SetAlpha(0.6)
+	elseif tabNum == 2 then
 		tab1Panel:Hide()
 		tab2Panel:Show()
+		tab3Panel:Hide()
 		tab1Btn:SetAlpha(0.6)
 		tab2Btn:SetAlpha(1.0)
+		tab3Btn:SetAlpha(0.6)
+	else
+		tab1Panel:Hide()
+		tab2Panel:Hide()
+		tab3Panel:Show()
+		tab1Btn:SetAlpha(0.6)
+		tab2Btn:SetAlpha(0.6)
+		tab3Btn:SetAlpha(1.0)
 	end
 end
 
 tab1Btn:SetScript("OnClick", function() ShowTab(1) end)
 tab2Btn:SetScript("OnClick", function() ShowTab(2) end)
+tab3Btn:SetScript("OnClick", function() ShowTab(3) end)
 
 -- ==========================================
 -- TAB 1: Rogue Rotation
@@ -1181,10 +1212,6 @@ evasionTitle:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, -290)
 evasionTitle:SetText("Evasion (priority order, top = first):")
 evasionTitle:SetTextColor(1, 0.5, 0.3)
 
-local tankModeCB, _ = MakeCheckbox(tab1Panel, "Tank Mode", 210, -290,
-	function() return RoguePokerDB and RoguePokerDB.tankMode end,
-	function(v) if RoguePokerDB then RoguePokerDB.tankMode = v end end)
-
 local evasionRows = {}
 
 local function RefreshEvasionRows()
@@ -1216,7 +1243,7 @@ local function RefreshEvasionRows()
 		nameLabel:SetWidth(110)
 		row.nameLabel = nameLabel
 
-		-- Up/Down buttons (always present, same position for all rows)
+		-- Up/Down buttons
 		local upBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
 		upBtn:SetWidth(22)
 		upBtn:SetHeight(18)
@@ -1245,7 +1272,7 @@ local function RefreshEvasionRows()
 		end)
 		row.downBtn = downBtn
 
-		-- Health threshold controls for Evasion and Vanish (after reorder buttons)
+		-- Health threshold controls for Evasion and Vanish
 		if ev.name == "Evasion" or ev.name == "Vanish" then
 			local minusBtn = CreateFrame("Button", nil, tab1Panel, "UIPanelButtonTemplate")
 			minusBtn:SetWidth(18)
@@ -1283,26 +1310,6 @@ local function RefreshEvasionRows()
 		table.insert(evasionRows, row)
 	end
 end
-
--- ---- Section: Options (Tab 1) ----
-local optionsY = -440
-
-local optTitle = tab1Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-optTitle:SetPoint("TOPLEFT", tab1Panel, "TOPLEFT", 10, optionsY)
-optTitle:SetText("Options:")
-optTitle:SetTextColor(0.6, 0.8, 1)
-
-local alwaysFeintCB, _ = MakeCheckbox(tab1Panel, "Always Feint (reduces threat)", 10, optionsY - 18,
-	function() return RoguePokerDB and RoguePokerDB.alwaysFeint end,
-	function(v) if RoguePokerDB then RoguePokerDB.alwaysFeint = v end end)
-
-local insigniaCB, _ = MakeCheckbox(tab1Panel, "Use Insignia when stunned", 10, optionsY - 40,
-	function() return RoguePokerDB and RoguePokerDB.useInsignia end,
-	function(v) if RoguePokerDB then RoguePokerDB.useInsignia = v end end)
-
-local pvpModeCB, _ = MakeCheckbox(tab1Panel, "PvP Mode (disables Assist)", 10, optionsY - 62,
-	function() return RoguePokerDB and RoguePokerDB.pvpMode end,
-	function(v) if RoguePokerDB then RoguePokerDB.pvpMode = v end end)
 
 -- ==========================================
 -- TAB 2: Interrupt
@@ -1424,6 +1431,101 @@ local function RefreshInterruptRows()
 end
 
 -- ==========================================
+-- TAB 3: Options
+-- ==========================================
+
+local optTitle3 = tab3Panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+optTitle3:SetPoint("TOPLEFT", tab3Panel, "TOPLEFT", 10, -8)
+optTitle3:SetText("Options:")
+optTitle3:SetTextColor(0.6, 0.8, 1)
+
+local alwaysFeintCB, _ = MakeCheckbox(tab3Panel, "Always Feint (reduces threat)", 10, -28,
+	function() return RoguePokerDB and RoguePokerDB.alwaysFeint end,
+	function(v) if RoguePokerDB then RoguePokerDB.alwaysFeint = v end end)
+
+local insigniaCB, _ = MakeCheckbox(tab3Panel, "Use Insignia when stunned", 10, -50,
+	function() return RoguePokerDB and RoguePokerDB.useInsignia end,
+	function(v) if RoguePokerDB then RoguePokerDB.useInsignia = v end end)
+
+local pvpModeCB, _ = MakeCheckbox(tab3Panel, "PvP Mode (disables Assist)", 10, -72,
+	function() return RoguePokerDB and RoguePokerDB.pvpMode end,
+	function(v) if RoguePokerDB then RoguePokerDB.pvpMode = v end end)
+
+local tankModeCB, _ = MakeCheckbox(tab3Panel, "Tank Mode", 10, -94,
+	function() return RoguePokerDB and RoguePokerDB.tankMode end,
+	function(v) if RoguePokerDB then RoguePokerDB.tankMode = v end end)
+
+-- ---- Auto Assist ----
+local assistSep = tab3Panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+assistSep:SetPoint("TOPLEFT", tab3Panel, "TOPLEFT", 10, -120)
+assistSep:SetText("------------------------------")
+assistSep:SetTextColor(0.4, 0.4, 0.4)
+
+local autoAssistCB, _ = MakeCheckbox(tab3Panel, "Auto Assist", 10, -136,
+	function() return RoguePokerDB and RoguePokerDB.autoAssist end,
+	function(v) if RoguePokerDB then RoguePokerDB.autoAssist = v end end)
+
+local assistNote = tab3Panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+assistNote:SetPoint("TOPLEFT", tab3Panel, "TOPLEFT", 10, -160)
+assistNote:SetText("When enabled and you have no target, assist this player:")
+assistNote:SetTextColor(0.7, 0.7, 0.7)
+
+local assistEditBox = CreateFrame("EditBox", "RoguePokerAssistEditBox", tab3Panel, "InputBoxTemplate")
+assistEditBox:SetWidth(200)
+assistEditBox:SetHeight(20)
+assistEditBox:SetPoint("TOPLEFT", tab3Panel, "TOPLEFT", 14, -178)
+assistEditBox:SetAutoFocus(false)
+assistEditBox:SetMaxLetters(64)
+assistEditBox:SetText("")
+assistEditBox:SetScript("OnEnterPressed", function()
+	assistEditBox:ClearFocus()
+	if RoguePokerDB then
+		RoguePokerDB.autoAssistName = assistEditBox:GetText()
+	end
+end)
+assistEditBox:SetScript("OnEscapePressed", function()
+	assistEditBox:ClearFocus()
+	-- Restore saved value on escape
+	if RoguePokerDB then
+		assistEditBox:SetText(RoguePokerDB.autoAssistName or "")
+	end
+end)
+assistEditBox:SetScript("OnEditFocusLost", function()
+	if RoguePokerDB then
+		RoguePokerDB.autoAssistName = assistEditBox:GetText()
+	end
+end)
+
+local assistSetBtn = CreateFrame("Button", nil, tab3Panel, "UIPanelButtonTemplate")
+assistSetBtn:SetWidth(40)
+assistSetBtn:SetHeight(20)
+assistSetBtn:SetPoint("LEFT", assistEditBox, "RIGHT", 4, 0)
+assistSetBtn:SetText("Set")
+assistSetBtn:SetScript("OnClick", function()
+	if UnitExists("target") and UnitIsPlayer("target") then
+		local name = UnitName("target")
+		assistEditBox:SetText(name)
+		if RoguePokerDB then
+			RoguePokerDB.autoAssistName = name
+		end
+	else
+		print("|cFFFFD700RoguePoker|r: No player target to set.")
+	end
+end)
+
+local assistClearBtn = CreateFrame("Button", nil, tab3Panel, "UIPanelButtonTemplate")
+assistClearBtn:SetWidth(46)
+assistClearBtn:SetHeight(20)
+assistClearBtn:SetPoint("LEFT", assistSetBtn, "RIGHT", 4, 0)
+assistClearBtn:SetText("Clear")
+assistClearBtn:SetScript("OnClick", function()
+	assistEditBox:SetText("")
+	if RoguePokerDB then
+		RoguePokerDB.autoAssistName = ""
+	end
+end)
+
+-- ==========================================
 -- Scan & Rebuild (after all local UI functions are defined)
 -- ==========================================
 function RoguePoker:ScanAndRebuild()
@@ -1481,6 +1583,8 @@ function RoguePoker:ScanAndRebuild()
 	insigniaCB:SetChecked(db.useInsignia)
 	tankModeCB:SetChecked(db.tankMode)
 	pvpModeCB:SetChecked(db.pvpMode)
+	autoAssistCB:SetChecked(db.autoAssist)
+	assistEditBox:SetText(db.autoAssistName or "")
 end
 
 -- ==========================================
@@ -1488,7 +1592,7 @@ end
 -- ==========================================
 local versionLabel = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 versionLabel:SetPoint("BOTTOMRIGHT", cfgFrame, "BOTTOMRIGHT", -8, 8)
-versionLabel:SetText("v1.1.5")
+versionLabel:SetText("v1.1.6")
 versionLabel:SetTextColor(0.5, 0.5, 0.5)
 
 -- ==========================================
@@ -1530,7 +1634,6 @@ end)
 -- ==========================================
 -- Load Event
 -- ==========================================
--- VARIABLES_LOADED: init DB only (spellbook not ready yet)
 local loadFrame = CreateFrame("Frame")
 loadFrame:RegisterEvent("VARIABLES_LOADED")
 loadFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -1580,7 +1683,6 @@ loadFrame:SetScript("OnEvent", function()
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		if not RoguePokerDB then return end
 		knownBuilders = RoguePoker:FilterKnown(RoguePoker.BUILDERS)
-		-- If saved builder is no longer known (respec), reset to first known builder
 		if table.getn(knownBuilders) > 0 then
 			local builderKnown = false
 			for _, b in ipairs(knownBuilders) do
@@ -1599,6 +1701,8 @@ loadFrame:SetScript("OnEvent", function()
 		insigniaCB:SetChecked(RoguePokerDB.useInsignia)
 		tankModeCB:SetChecked(RoguePokerDB.tankMode)
 		pvpModeCB:SetChecked(RoguePokerDB.pvpMode)
+		autoAssistCB:SetChecked(RoguePokerDB.autoAssist)
+		assistEditBox:SetText(RoguePokerDB.autoAssistName or "")
 		print("|cFFFFD700RoguePoker|r loaded. Type |cFFFFD700/rp|r to configure.")
 	end
 end)
