@@ -11,7 +11,6 @@ RoguePoker = {}
 RoguePoker.TickTime = 2
 RoguePoker.FirstTick = nil
 RoguePoker.Energy = 110
-RoguePoker.isAttacking = false
 RoguePoker.surpriseAttackReady = false
 RoguePoker.riposteReady = false
 RoguePoker.shadowOfDeathPending = false
@@ -289,10 +288,11 @@ function RoguePoker:TrackDebuff(name, duration)
 end
 
 function RoguePoker:AutoAttack()
-	-- Only start auto-attack if not already in combat to avoid toggling it off
-	if not RoguePoker.isAttacking then
-		RoguePoker.isAttacking = true
-		AttackTarget()
+	-- Only enable auto-attack if it isn't already running
+	if UnitExists("target") and not UnitIsDead("target") then
+		if not IsCurrentAction(72) then
+			AttackTarget()
+		end
 	end
 end
 
@@ -533,8 +533,23 @@ function RoguePoker:Rota()
 	local db          = RoguePokerDB
 	local cP          = GetComboPoints("player")
 	local energy      = UnitMana("player")
-	local mobTargetsMe = (not UnitIsPlayer("target")) and RoguePoker:IsMyTargetTargetingMe()
 
+	-- If current target is dead, clear it and find a new one
+	if UnitExists("target") and UnitIsDead("target") then
+		ClearTarget()
+		if db.autoAssist and db.autoAssistName and db.autoAssistName ~= "" then
+			-- Auto assist: target the assist player then assist their target
+			TargetByName(db.autoAssistName)
+			if UnitExists("target") then
+				AssistUnit("target")
+			end
+		else
+			-- Fall back to nearest enemy
+			TargetNearestEnemy()
+		end
+	end
+
+	local mobTargetsMe = (not UnitIsPlayer("target")) and RoguePoker:IsMyTargetTargetingMe()
 
 	RoguePoker:AutoAttack()
 	if not db.pvpMode then
@@ -1525,6 +1540,36 @@ assistClearBtn:SetScript("OnClick", function()
 	end
 end)
 
+-- ---- Auto Attack Setup ----
+local attackSep = tab3Panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+attackSep:SetPoint("TOPLEFT", tab3Panel, "TOPLEFT", 10, -210)
+attackSep:SetText("------------------------------")
+attackSep:SetTextColor(0.4, 0.4, 0.4)
+
+local attackNote = tab3Panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+attackNote:SetPoint("TOPLEFT", tab3Panel, "TOPLEFT", 10, -224)
+attackNote:SetText("Required for auto-attack detection (places Attack into slot 72):")
+attackNote:SetTextColor(0.7, 0.7, 0.7)
+
+local setupAttackBtn = CreateFrame("Button", nil, tab3Panel, "UIPanelButtonTemplate")
+setupAttackBtn:SetWidth(130)
+setupAttackBtn:SetHeight(22)
+setupAttackBtn:SetPoint("TOPLEFT", tab3Panel, "TOPLEFT", 10, -242)
+setupAttackBtn:SetText("Setup Auto Attack")
+setupAttackBtn:SetScript("OnClick", function()
+	-- Find the Attack spell in the spellbook and place it into action slot 72
+	for i = 1, 200 do
+		local name = GetSpellName(i, BOOKTYPE_SPELL)
+		if name == "Attack" then
+			PickupSpell(i, BOOKTYPE_SPELL)
+			PlaceAction(72)
+			print("|cFFFFD700RoguePoker|r: Attack placed in action slot 72.")
+			return
+		end
+	end
+	print("|cFFFFD700RoguePoker|r: Could not find Attack in spellbook.")
+end)
+
 -- ==========================================
 -- Scan & Rebuild (after all local UI functions are defined)
 -- ==========================================
@@ -1592,7 +1637,7 @@ end
 -- ==========================================
 local versionLabel = cfgFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 versionLabel:SetPoint("BOTTOMRIGHT", cfgFrame, "BOTTOMRIGHT", -8, 8)
-versionLabel:SetText("v1.1.6")
+versionLabel:SetText("v1.1.7")
 versionLabel:SetTextColor(0.5, 0.5, 0.5)
 
 -- ==========================================
@@ -1643,7 +1688,6 @@ loadFrame:RegisterEvent("CHAT_MSG_COMBAT_SELF_MISSES")
 loadFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
 loadFrame:SetScript("OnEvent", function()
 	if event == "PLAYER_REGEN_DISABLED" then
-		RoguePoker.isAttacking = true
 		RoguePoker.surpriseAttackReady = false
 		RoguePoker.surpriseAttackTime = nil
 		RoguePoker.riposteReady = false
@@ -1651,7 +1695,6 @@ loadFrame:SetScript("OnEvent", function()
 		RoguePoker.shadowOfDeathPending = false
 		RoguePoker.shadowOfDeathPendingTime = nil
 	elseif event == "PLAYER_REGEN_ENABLED" then
-		RoguePoker.isAttacking = false
 		RoguePoker.surpriseAttackReady = false
 		RoguePoker.surpriseAttackTime = nil
 		RoguePoker.riposteReady = false
